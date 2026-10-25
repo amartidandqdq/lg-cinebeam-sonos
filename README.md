@@ -57,9 +57,12 @@ paired once over Bluetooth from the projector menu.
    mkdir -p ~/sonos-watcher && cp watcher/sonos-watcher.py ~/sonos-watcher/
    ```
 
-2. **Pair with the projector (once).** Run any SSAP client that does `PROMPT` pairing and accept
-   the prompt on screen. Save the `client-key` from the `registered` reply to
-   `~/sonos-watcher/client-key.txt`.
+2. **Pair with the projector (once).** With the projector on, run the command below and accept the
+   prompt on screen within 60 s. The key lands in `~/sonos-watcher/client-key.txt`.
+
+   ```sh
+   ~/.venvs/sonos-watcher/bin/python tools/pair.py 192.168.1.2
+   ```
 
 3. **Configure.** Edit the constants at the top of `~/sonos-watcher/sonos-watcher.py`:
 
@@ -123,7 +126,7 @@ The call runs blind (no response comes back), so the watcher checks the result t
 | Path | Contents |
 |------|----------|
 | `watcher/` | The service and its systemd unit |
-| `tools/` | Debug helpers: `nav.py` (keys and screenshots), `luna.py` (raw luna call), `a2dp.py` (connect test), `popup.py` (popup detection), `sonosctl.py` (Sonos UPnP state) |
+| `tools/` | `pair.py` (one-time pairing), plus debug helpers: `nav.py` (keys and screenshots), `luna.py` (raw luna call), `a2dp.py` (connect test), `popup.py` (popup detection), `sonosctl.py` (Sonos UPnP state) |
 | `scripts/`, `PLAN.md`, `trouvailles.md` | The original debloat plan and the full investigation log (French; §10–12 cover the reconnect) |
 | `backup/` | Read-only snapshot of the projector's app inventory |
 
