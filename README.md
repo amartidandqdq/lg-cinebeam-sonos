@@ -1,42 +1,140 @@
-# LG CineBeam Q → Sonos Arc Ultra: Bluetooth auto-reconnect
+# LG CineBeam Q → Sonos Arc Ultra, reconnected automatically
 
-LG CineBeam Q (HU710QKE, webOS 24) forgets its Bluetooth soundbar after every cold boot.
-`watcher/sonos-watcher.py` runs on a Linux box on the LAN and reconnects the Sonos as soon as
-the projector powers on: no root, no developer mode, no manual click.
+[![gitleaks](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/gitleaks.yml)
+![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot)
+![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
+![webOS](https://img.shields.io/badge/webOS-24-A50034)
+
+Turn the projector on. About 40 seconds later, the sound plays on the Sonos.
+No root, no developer mode, no remote in hand, no "Yes" to click.
+
+> **The problem.** The LG CineBeam Q (HU710QKE, webOS 24) forgets its Bluetooth soundbar on every
+> cold boot. Getting it back takes six clicks in the menus plus a confirmation popup, every time.
+>
+> **The fix.** A ~250-line Python watcher on any always-on Linux box on the LAN. It notices the
+> projector powering on and reconnects the Sonos through the projector's own local API (SSAP).
 
 ## How it works
 
-1. Polls the projector's SSAP port (3001). On power-on, waits 25 s for webOS to settle.
-2. Opens the A2DP link with `luna://com.webos.service.bluetooth2/a2dp/connect`. The call is
-   tunnelled through SSAP: a `createAlert` whose `onclose` points to the luna URI, then
-   `closeAlert` (trick from `brunofgmag/lgtv-control-mcp`).
-3. The Sonos answers with a "wants to connect… Yes/No" popup. The watcher detects it on an
-   `ssap://tv/executeOneShot` screenshot (pixel signature) and presses ENTER via the pointer
-   input socket.
-4. Sets `changeSoundOutput` to `bt_soundbar`.
-5. Fallback: replays remote keys through Settings → Sound → Sound Out → Use Wireless Speaker →
-   Sonos → Connect.
-
-Runs once per power-on, so a later manual choice of sound output is respected.
-
-## Install (Debian, user service)
-
-```sh
-python3 -m venv --without-pip ~/.venvs/sonos-watcher   # then add websockets + pillow
-mkdir -p ~/sonos-watcher && cp watcher/sonos-watcher.py ~/sonos-watcher/
-# pair once (accept the prompt on the projector) and store the key in ~/sonos-watcher/client-key.txt
-cp watcher/sonos-watcher.service ~/.config/systemd/user/
-systemctl --user enable --now sonos-watcher
+```mermaid
+flowchart LR
+    A[Projector powers on] --> B[Port 3001 answers<br/>wait 25 s]
+    B --> C{Output already<br/>bt_*?}
+    C -- yes --> Z[Nothing to do]
+    C -- no --> D[luna a2dp/connect<br/>via createAlert trick]
+    D --> E[Screenshot:<br/>Yes/No popup?]
+    E -- seen --> F[Press ENTER]
+    F --> G[changeSoundOutput<br/>bt_soundbar]
+    E -- not seen --> G
+    G --> H{Sound on Sonos?}
+    H -- yes --> Z
+    H -- "no (after 2 tries)" --> I[Fallback: replay<br/>remote keys in Settings]
+    I --> H
 ```
 
-Edit `HOST`, `SONOS_BT` and `MENU_KEYS` at the top of the script for another setup.
-`client-key.txt` is a secret and is git-ignored.
+| Step | What happens | SSAP call |
+|------|--------------|-----------|
+| Detect | TCP probe on the projector every 15 s | none |
+| Check | Read the current sound output | `ssap://audio/getStatus` |
+| Connect | Open the A2DP link to the Sonos | `luna://com.webos.service.bluetooth2/a2dp/connect` |
+| Accept | Find the "wants to connect" popup on a screenshot, press ENTER | `ssap://tv/executeOneShot` + pointer input socket |
+| Route | Send the audio to the soundbar | `ssap://com.webos.service.apiadapter/audio/changeSoundOutput` |
+| Fallback | Settings → Sound → Sound Out → Wireless Speaker → Sonos → Connect | `system.launcher/launch` + remote keys |
 
-## Layout
+It runs **once per power-on**. If you switch the output by hand afterwards, the watcher leaves it alone.
 
-- `watcher/`: the service and its systemd unit.
-- `tools/`: debugging helpers. `nav.py` sends keys and takes a screenshot, `luna.py` makes a raw
-  luna call, `a2dp.py` runs a connect test, `sonosctl.py` reads the Sonos UPnP state.
-- `scripts/`, `PLAN.md`, `trouvailles.md`: the original debloat plan and the full investigation
-  log (in French; §10–12 cover the reconnect).
-- `backup/`: the projector app inventory (read-only snapshot).
+## Quick start
+
+**You need:** the projector and a Linux box on the same LAN, Python 3.11+, and the Sonos already
+paired once over Bluetooth from the projector menu.
+
+1. **Install**
+
+   ```sh
+   git clone https://github.com/amartidandqdq/lg-cinebeam-sonos && cd lg-cinebeam-sonos
+   python3 -m venv ~/.venvs/sonos-watcher
+   ~/.venvs/sonos-watcher/bin/pip install -r requirements.txt
+   mkdir -p ~/sonos-watcher && cp watcher/sonos-watcher.py ~/sonos-watcher/
+   ```
+
+2. **Pair with the projector (once).** Run any SSAP client that does `PROMPT` pairing and accept
+   the prompt on screen. Save the `client-key` from the `registered` reply to
+   `~/sonos-watcher/client-key.txt`.
+
+3. **Configure.** Edit the constants at the top of `~/sonos-watcher/sonos-watcher.py`:
+
+   | Constant | Set it to | Default |
+   |----------|-----------|---------|
+   | `HOST` | Projector LAN IP (reserve it in your router) | `192.168.1.2` |
+   | `SONOS_BT` | Sonos Bluetooth address (same as its Wi-Fi MAC on the Arc Ultra) | placeholder |
+   | `TARGET` | Output name to select | `bt_soundbar` |
+   | `MENU_KEYS` | Key path for the fallback, if your menu differs | webOS 24 path |
+   | `WARMUP` | Seconds to wait after power-on | `25` |
+   | `ATTEMPTS` | Tries per power-on (2 luna, then menu) | `4` |
+
+4. **Run as a user service**
+
+   ```sh
+   mkdir -p ~/.config/systemd/user
+   cp watcher/sonos-watcher.service ~/.config/systemd/user/
+   systemctl --user enable --now sonos-watcher
+   loginctl enable-linger "$USER"   # keep it running after logout
+   ```
+
+5. **Check.** Power-cycle the projector, then:
+
+   ```sh
+   tail -f ~/sonos-watcher/watcher.log
+   ```
+
+   ```text
+   projecteur detecte — warmup 25 s...
+   sortie actuelle tv_speaker -> connexion Sonos...
+     popup de connexion detecte -> Yes
+     tentative 1/4 (luna): SONOS CONNECTEE
+   ```
+
+   Log lines are in French. Uninstall with `systemctl --user disable --now sonos-watcher`.
+
+## The luna trick
+
+SSAP clients cannot call `luna://` services directly. webOS will, however, run the URI attached to a
+system alert's `onclose` when that alert is closed. So the watcher:
+
+1. creates an alert whose `onclose`, `onfail` and button all point to the luna call;
+2. closes it straight away with `closeAlert`.
+
+The call runs blind (no response comes back), so the watcher checks the result through
+`audio/getStatus`. Credit for the technique:
+[brunofgmag/lgtv-control-mcp](https://github.com/brunofgmag/lgtv-control-mcp).
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Output says `bt_soundbar` but sound stays on the projector | The Yes/No popup was not accepted | Check the `POPUP` pixel signature against a fresh capture (`tools/popup.py`) |
+| `echec apres 4 tentatives` | Sonos off, asleep or out of range | Wake the Sonos; it retries at the next power-on |
+| Fallback opens the wrong menu | Menu order differs, or the Sonos is not the first registered device | Adjust `MENU_KEYS` while watching `tools/nav.py` screenshots |
+| `WS indisponible` in a loop | Wrong `HOST` or a revoked `client-key` | Fix the IP, pair again |
+| Sound drops when you start Sonos radio | Sonos leaves BT for the new source | Expected; the watcher only acts once per power-on |
+
+## Repository layout
+
+| Path | Contents |
+|------|----------|
+| `watcher/` | The service and its systemd unit |
+| `tools/` | Debug helpers: `nav.py` (keys and screenshots), `luna.py` (raw luna call), `a2dp.py` (connect test), `popup.py` (popup detection), `sonosctl.py` (Sonos UPnP state) |
+| `scripts/`, `PLAN.md`, `trouvailles.md` | The original debloat plan and the full investigation log (French; §10–12 cover the reconnect) |
+| `backup/` | Read-only snapshot of the projector's app inventory |
+
+## Limitations
+
+- Tested on one setup: HU710QKE, webOS 24, Sonos Arc Ultra.
+- A firmware update may move the popup or reorder the menus. Both are one constant to update.
+- The `client-key` grants control of the projector. It is git-ignored; keep it that way.
+  MACs and Sonos IDs in this repo are placeholders.
+
+## Disclaimer
+
+Personal project, not affiliated with LG Electronics or Sonos. It uses the projector's local
+API only; nothing leaves your LAN.
