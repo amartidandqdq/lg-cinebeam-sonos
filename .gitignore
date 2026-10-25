@@ -1,0 +1,4 @@
+client-key.txt
+__pycache__/
+*.pyc
+*.jpg

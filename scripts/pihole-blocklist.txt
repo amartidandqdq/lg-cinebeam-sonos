@@ -1,0 +1,32 @@
+# Blocage pub / telemetrie LG — format liste de domaines (1 par ligne)
+# Source principale : lasharor (cleanyourtv-WebOS), endpoints verifie ; complete de la base LGE connue.
+# Import Pi-hole : Domainlist -> ajouter ce fichier (group lg-projecteur cible uniquement).
+# Ne surtout pas bloquer les domaines racines lgtvcommon.com / lge.com (services legitimes).
+
+# --- Publicite (confirme) ---
+eic.ads.lgtvcommon.com
+lgsmartad.com
+ad.lgsmartad.com
+info.lgsmartad.com
+nl.ad.lgsmartad.com
+nl.info.lgsmartad.com
+us.ad.lgsmartad.com
+us.info.lgsmartad.com
+sdk.lgsmartad.com
+
+# --- Reco de contenu / metadata (contentminer, acr2) ---
+metadata.lgtvcommon.com
+contentminer.lgtvcommon.com
+ngs.lgtvcommon.com
+
+# --- Promotions a l'ecran (nudge) ---
+nudge.lgtvcommon.com
+
+# --- Telemetrie (remotelogger, service-logger) ---
+telemetry.lge.com
+telemetry.analytics.lge.com
+us.lge.com
+
+# --- Lancer avec prudence (a tester avant blocage via pihole query log) ---
+# smartup.lgtvcommon.com
+# lgtvdp.lgtvcommon.com

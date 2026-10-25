@@ -1,0 +1,12 @@
+[Unit]
+Description=Watcher Sonos CineBeam - reconnexion BT automatique
+After=network-online.target
+
+[Service]
+ExecStart=%h/.venvs/sonos-watcher/bin/python %h/sonos-watcher/sonos-watcher.py
+Restart=always
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
