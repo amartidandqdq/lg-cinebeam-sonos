@@ -134,6 +134,14 @@ The call runs blind (no response comes back), so the watcher checks the result t
 - The `client-key` grants control of the projector. It is git-ignored; keep it that way.
   MACs and Sonos IDs in this repo are placeholders.
 
+## Thanks
+
+- [brunofgmag/lgtv-control-mcp](https://github.com/brunofgmag/lgtv-control-mcp) for the `createAlert`
+  → `luna://` technique. Without it, this would still be a remote-key macro.
+- The webOS homebrew and SSAP community, whose reverse-engineering notes made the local API usable.
+- [websockets](https://github.com/python-websockets/websockets) and
+  [Pillow](https://github.com/python-pillow/Pillow), the only two dependencies.
+
 ## Disclaimer
 
 Personal project, not affiliated with LG Electronics or Sonos. It uses the projector's local
