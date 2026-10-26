@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — lot 2
+- Require three exact-target readings over at least ten seconds.
+- Report stable route separately from unverified device identity, link and audio.
+- Recheck current output before every connection method and stop on another output.
+
+
 ## Unreleased — lot 1
 - Observe at startup; preserve every non-default output from the first reading.
 - Default to no action after ambiguous short outages; aggressive recovery is opt-in.
