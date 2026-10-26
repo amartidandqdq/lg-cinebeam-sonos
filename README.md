@@ -4,6 +4,8 @@
 ![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![webOS](https://img.shields.io/badge/webOS-24-A50034)
+[![ci](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/ci.yml/badge.svg)](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/ci.yml)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 Turn the projector on. About 40 seconds later, the sound plays on the Sonos.
 No root, no developer mode, no remote in hand, no "Yes" to click.
@@ -43,6 +45,14 @@ flowchart LR
 
 It runs **once per power-on**. If you switch the output by hand afterwards, the watcher leaves it alone.
 
+### Safety rules
+
+- A **short LAN drop is not a power-off**: the projector is declared off only after 4 failed probes in a row.
+- **Remote keys are replayed once at most**, on the first round after a real power-on. Never on a retry, and never when the service restarts on a projector that is already on.
+- After a failed round: up to 3 retries (2, 10, 30 min), invisible `luna` only. Then it gives up until the next power-on.
+- Retries stop as soon as the sound output was changed by hand.
+- `SORTIE BT ACTIVE` means the projector *reports* `bt_*`. It cannot prove the audio is heard on the Sonos.
+
 ## Quick start
 
 **You need:** the projector and a Linux box on the same LAN, Python 3.11+, and the Sonos already
@@ -64,22 +74,23 @@ paired once over Bluetooth from the projector menu.
    ~/.venvs/sonos-watcher/bin/python tools/pair.py 192.168.1.2
    ```
 
-3. **Configure.** Edit the constants at the top of `~/sonos-watcher/sonos-watcher.py`:
+3. **Configure.** Create `~/sonos-watcher/watcher.env` from `watcher/watcher.env.example`:
 
-   | Constant | Set it to | Default |
+   | Variable | Set it to | Default |
    |----------|-----------|---------|
-   | `HOST` | Projector LAN IP (reserve it in your router) | `192.168.1.2` |
-   | `SONOS_BT` | Sonos Bluetooth address (same as its Wi-Fi MAC on the Arc Ultra) | placeholder |
-   | `TARGET` | Output name to select | `bt_soundbar` |
-   | `MENU_KEYS` | Key path for the fallback, if your menu differs | webOS 24 path |
+   | `LG_HOST` | Projector LAN IP (reserve it in your router) | `192.168.1.2` |
+   | `SONOS_BT` | Sonos Bluetooth address (same as its Wi-Fi MAC on the Arc Ultra). **Required**: the service refuses to start without it | none |
+   | `MENU_KEYS` | Comma-separated key path of the fallback, if your menu differs | webOS 24 path |
    | `WARMUP` | Seconds to wait after power-on | `25` |
-   | `ATTEMPTS` | Tries per power-on (2 luna, then menu) | `4` |
+
+   `TARGET` (`bt_soundbar`) and the retry timings are constants at the top of the script.
 
 4. **Run as a user service**
 
    ```sh
    mkdir -p ~/.config/systemd/user
    cp watcher/sonos-watcher.service ~/.config/systemd/user/
+   systemctl --user daemon-reload
    systemctl --user enable --now sonos-watcher
    loginctl enable-linger "$USER"   # keep it running after logout
    ```
@@ -94,7 +105,7 @@ paired once over Bluetooth from the projector menu.
    projecteur detecte — warmup 25 s...
    sortie actuelle tv_speaker -> connexion Sonos...
      popup de connexion detecte -> Yes
-     tentative 1/4 (luna): SONOS CONNECTEE
+     tentative 1/2 (luna): SORTIE BT ACTIVE
    ```
 
    Log lines are in French. Uninstall with `systemctl --user disable --now sonos-watcher`.
@@ -116,8 +127,8 @@ The call runs blind (no response comes back), so the watcher checks the result t
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Output says `bt_soundbar` but sound stays on the projector | The Yes/No popup was not accepted | Check the `POPUP` pixel signature against a fresh capture (`tools/popup.py`) |
-| `echec apres 4 tentatives` | Sonos off, asleep or out of range | Wake the Sonos; it retries at the next power-on |
-| Fallback opens the wrong menu | Menu order differs, or the Sonos is not the first registered device | Adjust `MENU_KEYS` while watching `tools/nav.py` screenshots |
+| `echec definitif` | Sonos off, asleep or out of range | Wake the Sonos; it retries at the next power-on |
+| Fallback opens the wrong menu | Menu order differs, or the Sonos is not the first registered device | Adjust `MENU_KEYS` in `watcher.env` while watching `tools/nav.py` screenshots |
 | `WS indisponible` in a loop | Wrong `HOST` or a revoked `client-key` | Fix the IP, pair again |
 | Sound drops when you start Sonos radio | Sonos leaves BT for the new source | Expected; the watcher only acts once per power-on |
 
@@ -127,15 +138,30 @@ The call runs blind (no response comes back), so the watcher checks the result t
 |------|----------|
 | `watcher/` | The service and its systemd unit |
 | `tools/` | `pair.py` (one-time pairing), plus debug helpers: `nav.py` (keys and screenshots), `luna.py` (raw luna call), `a2dp.py` (connect test), `popup.py` (popup detection), `sonosctl.py` (Sonos UPnP state) |
-| `scripts/`, `PLAN.md`, `trouvailles.md` | The original debloat plan and the full investigation log (French; §10–12 cover the reconnect) |
+| `tests/` | `pytest` suite: power-off hysteresis, bounded retries, a simulated `main()` loop, `/etc/hosts` rollback |
+| `scripts/`, `PLAN.md`, `trouvailles.md` | The original debloat plan (separate, experimental, reversible with `restore-root.sh`) and the full investigation log (French; §10–12 cover the reconnect) |
+| `legacy/` | Superseded experiments. Do not use |
 | `backup/` | Read-only snapshot of the projector's app inventory |
 
 ## Limitations
 
 - Tested on one setup: HU710QKE, webOS 24, Sonos Arc Ultra.
 - A firmware update may move the popup or reorder the menus. Both are one constant to update.
-- The `client-key` grants control of the projector. It is git-ignored; keep it that way.
-  MACs and Sonos IDs in this repo are placeholders.
+- The `client-key` grants control of the projector. It is git-ignored (and written `0600`); keep it that
+  way. MACs and Sonos IDs in this repo are placeholders.
+- TLS certificate checks are off: the projector presents a self-signed certificate. Keep port 3001 on
+  your LAN only.
+- The pairing manifest asks for broad SSAP permissions (copied from the key that is known to work).
+  Narrowing them is untested.
+
+## Development
+
+```sh
+pip install -r requirements.txt -r requirements-dev.txt
+ruff check . && python -m pytest -q
+```
+
+Version history: [CHANGELOG.md](CHANGELOG.md). Licensed under [MIT](LICENSE).
 
 ## Thanks
 

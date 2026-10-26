@@ -3,7 +3,6 @@ import json
 import pathlib
 import ssl
 import sys
-import time
 
 from websockets.sync.client import connect
 

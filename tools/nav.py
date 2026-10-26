@@ -5,9 +5,8 @@ import sys
 import time
 import urllib.request
 
-from websockets.sync.client import connect
-
 import lgctl
+from websockets.sync.client import connect
 
 ws = lgctl.session()
 sp = connect(lgctl.call(ws, "ssap://com.webos.service.networkinput/getPointerInputSocket")["socketPath"],

@@ -1,0 +1,34 @@
+# Changelog
+
+## 0.2.0 - 2026-10-26
+
+Hardening after a technical audit. **Not yet validated on hardware** (test planned on a real
+power cycle); 0.1.0 is the version proven on the HU710QKE.
+
+### Changed
+- Power-off is only concluded after 4 consecutive failed probes, so a short LAN drop no longer
+  looks like a power cycle and no longer triggers a reconnect.
+- After a failed round the watcher retries up to 3 times (2, 10, 30 min), **luna only**: remote
+  keys are never replayed on a retry.
+- Restarting the service on an already-powered projector never sends remote keys.
+- Retries stop if the user switched the sound output by hand.
+- Log line `SONOS CONNECTEE` is now `SORTIE BT ACTIVE`: the projector reports the output, not
+  the audio actually heard.
+- Configuration moved to environment variables (`watcher.env`): `LG_HOST`, `SONOS_BT`,
+  `MENU_KEYS`, `WARMUP`. The service refuses to start with a missing or placeholder `SONOS_BT`.
+
+### Fixed
+- `scripts/restore-root.sh` now really reverts the `/etc/hosts` changes of `debloat.sh`
+  (it only contained no-op placeholders).
+
+### Removed
+- Unused `FALLBACK_HOSTS`.
+- Obsolete experiments moved to `legacy/` (one of them targeted the wrong output, `bt_audio`).
+- Third-party developer emails scrubbed from the app inventory snapshot.
+
+### Added
+- `tools/pair.py`, MIT license, tests (`pytest`), CI (`ruff` + `pytest`).
+
+## 0.1.0 - 2026-10-25
+
+First public version: luna A2DP connect, popup acceptance, menu fallback.
