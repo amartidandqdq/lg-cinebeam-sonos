@@ -10,6 +10,14 @@ Hardware: HU710QKE / Sonos Arc Ultra. Firmware family previously reported webOS 
 
 Not deployed. No physical test result is claimed. The user's actual setup uses Bluetooth only; HDMI/manual-output protections are tested in simulation for the public project. No blind or repeated physical cycles were scheduled.
 
+At source revision `df9a6b3070026569e5b52515342c0110d0d375de`, CI recorded **73 passed**
+on each of Python 3.11, 3.12 and 3.13, including the loopback TLS/websocket integration.
+[CI run](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/runs/40381770933)
+and [Gitleaks](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/runs/40381771236)
+are green. These are automated candidate results, not physical-device evidence.
+Pending hardware acceptance is tracked separately in
+[issue #11](https://github.com/amartidandqdq/lg-cinebeam-sonos/issues/11).
+
 | Scenario | Automated evidence | Candidate hardware status |
 |---|---|---|
 | Startup observation on tv_speaker / ARC / other BT | Simulated, zero mutation | Pending |
