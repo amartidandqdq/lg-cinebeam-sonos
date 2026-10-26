@@ -11,6 +11,13 @@ for s in remotelogger service-logger contentminer nudge; do
   systemctl start "$s" >/dev/null 2>&1
 done
 
-# hosts : copie RAM puis lignes marquees
-if [ -e /tmp/hosts.lgdebloat.mounted ]; then :; fi
-if grep -q "# lg-debloat" /etc/hosts 2>/dev/null; then :; fi
+# hosts : demonter la copie RAM (bind mount) puis retirer les lignes marquees
+HOSTS_FILE=${HOSTS_FILE:-/etc/hosts}
+if [ -e /tmp/hosts.lgdebloat.mounted ]; then
+  umount "$HOSTS_FILE" 2>/dev/null && rm -f /tmp/hosts.lgdebloat /tmp/hosts.lgdebloat.mounted
+fi
+if grep -q "# lg-debloat" "$HOSTS_FILE" 2>/dev/null; then
+  # cat > plutot que mv : conserve l'inode (le fichier peut etre un point de montage)
+  grep -v "# lg-debloat" "$HOSTS_FILE" > "/tmp/hosts.restore.$$" && cat "/tmp/hosts.restore.$$" > "$HOSTS_FILE"
+  rm -f "/tmp/hosts.restore.$$"
+fi
