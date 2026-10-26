@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0-rc.1 — not deployed
+- Add explicit pause/resume/reconnect controls and read-only JSON diagnostics.
+- Validate configuration and private key permissions; rotate local logs.
+- Install code/unit with backups while preserving existing key and config.
+- Reuse TLS policy for pairing; preserve existing key on refusal.
+- Add Python 3.11–3.13 CI, operational rollback and hardware-validation record.
+- Hardware-only release gates remain open; no candidate deployment is claimed.
+
+
 ## Unreleased — lot 4
 - Validate registration and bound SSAP response waits by absolute deadlines.
 - Require a verified certificate pin or explicit insecure-LAN opt-in.

@@ -1,24 +1,15 @@
 #!/usr/bin/env python3
-"""Watcher Sonos : reconnecte automatiquement le LG CineBeam a la barre BT des qu'il s'allume.
-
-Tourne sur m720q (Debian) comme service utilisateur systemd.
-Logique :
-  - surveille le port WSS 3001 du projecteur (allume = joignable)
-  - quand il redevient joignable, attend que les services webOS soient prets
-  - lit la sortie audio ; si ce n'est pas bt_*, connexion A2DP via luna (secours : menu)
-    (une fois par allumage : un choix manuel ensuite est respecte)
-  - confirme ; note tout dans ~/sonos-watcher/watcher.log
-Garde-fous : une coupure reseau breve n'est pas une extinction (OFF_AFTER sondes ratees
-d'affilee), les reprises apres echec sont bornees et sans menu, et un redemarrage du
-service sur un projecteur deja allume n'envoie jamais de touches a la telecommande.
-Config : variables d'environnement LG_HOST, SONOS_BT (obligatoire), MENU_KEYS, WARMUP
-(voir watcher.env.example). Reversible : systemctl --user disable --now sonos-watcher.
+"""Conservative local Bluetooth recovery for the measured LG HU710QKE / webOS 24.
+Observe at startup; recover default output after a detected off/on cycle. Exact route
+stability does not prove device identity, A2DP connection or audible audio. See README.
 """
+import argparse
 import hashlib
 import hmac
 import http.client
 import io
 import json
+import logging
 import os
 import pathlib
 import re
@@ -28,6 +19,7 @@ import sys
 import time
 import urllib.parse
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from typing import NamedTuple
 
 from PIL import Image, ImageStat
@@ -37,14 +29,15 @@ HOST = os.environ.get("LG_HOST", "192.168.1.2")  # IP LAN du projecteur (reserve
 PORT = 3001
 CK_FILE = pathlib.Path.home() / "sonos-watcher" / "client-key.txt"
 LOG_FILE = pathlib.Path.home() / "sonos-watcher" / "watcher.log"
+PAUSE_FILE = LOG_FILE.parent / "paused"
 TARGET = "bt_soundbar"  # nom qui reconnecte la Sonos (bt_audio est annule)
 POLL = 10          # s entre deux sondes quand le projecteur est joignable
 SCAN = 15          # s entre deux scans quand il est eteint
-WARMUP = int(os.environ.get("WARMUP", "25"))  # s d'attente apres l'allumage (services webOS)
+WARMUP = os.environ.get("WARMUP", 25)  # s d'attente apres l'allumage (services webOS)
 OFF_AFTER = 4      # sondes ratees d'affilee avant de conclure "eteint" (coupure LAN != extinction)
 BLIP_POLL = 5      # s entre deux sondes quand une sonde vient d'echouer
 RETRY_DELAYS = (120, 600, 1800)  # s avant chaque reprise apres un echec ; ensuite on abandonne
-STABILITY_SECONDS = float(os.environ.get("STABILITY_SECONDS", "10"))
+STABILITY_SECONDS = os.environ.get("STABILITY_SECONDS", 10)
 MENU_FALLBACK = os.environ.get("MENU_FALLBACK", "0") == "1"
 MENU_PROFILE = os.environ.get("MENU_PROFILE", "")
 AUTO_RECOVER_BLIPS = os.environ.get("AUTO_RECOVER_BLIPS", "0") == "1"
@@ -117,11 +110,13 @@ def parse_keys(text):
 def log(msg):
     line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}"
     print(line, flush=True)
+    handler = RotatingFileHandler(LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8", delay=True)
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        handler.emit(logging.LogRecord("sonos", logging.INFO, "", 0, line, (), None))
     except OSError:
         pass
+    finally:
+        handler.close()
 
 
 def reachable():
@@ -222,11 +217,15 @@ MENU_KEYS = parse_keys(os.environ.get("MENU_KEYS", ""))
 
 
 def menu_connect(ws, n):
+    if PAUSE_FILE.exists():
+        return
     call(ws, n, "ssap://system.launcher/launch", {"id": "com.palm.app.settings"})
     time.sleep(7)  # 1er lancement apres boot lent : 3 s ne suffisaient pas
     path = json.loads(call(ws, n + 1, "ssap://com.webos.service.networkinput/getPointerInputSocket"))["payload"]["socketPath"]
     with secure_connect(path) as sp:
         for key in MENU_KEYS:
+            if PAUSE_FILE.exists():
+                return
             sp.send(f"type:button\nname:{key}\n\n")
             time.sleep(1.2)
         time.sleep(6)
@@ -257,7 +256,7 @@ def luna_connect(ws, n):
             press(ws, n + 30, "ENTER")
             time.sleep(3)
             break
-    if classify_output(sound_output(ws, n + 3)) in ("TARGET", "DEFAULT_FALLBACK"):
+    if not PAUSE_FILE.exists() and classify_output(sound_output(ws, n + 3)) in ("TARGET", "DEFAULT_FALLBACK"):
         call(ws, n + 2, "ssap://com.webos.service.apiadapter/audio/changeSoundOutput", {"output": TARGET})
 
 
@@ -332,6 +331,8 @@ def popup_visible(ws, n):
 
 
 def press(ws, n, key):
+    if PAUSE_FILE.exists():
+        return
     path = json.loads(call(ws, n, "ssap://com.webos.service.networkinput/getPointerInputSocket"))["payload"]["socketPath"]
     with secure_connect(path) as sp:
         sp.send(f"type:button\nname:{key}\n\n")
@@ -346,7 +347,10 @@ def close(ws):
 
 
 def sound_output(ws, n):
-    return json.loads(call(ws, n, "ssap://audio/getStatus"))["payload"]["volumeStatus"]["soundOutput"]
+    output = json.loads(call(ws, n, "ssap://audio/getStatus"))["payload"]["volumeStatus"]["soundOutput"]
+    if not isinstance(output, str) or not re.fullmatch(r"[a-zA-Z0-9_]{1,64}", output):
+        raise SessionError("invalid_output_payload")
+    return output
 
 
 class RouteResult(NamedTuple):
@@ -381,6 +385,8 @@ def observe_route(ws, n):
 def connect_round(ws, n, methods):
     result = RouteResult("UNKNOWN", "no_attempt")
     for i, how in enumerate(methods, 1):
+        if PAUSE_FILE.exists():
+            return RouteResult("UNKNOWN", "paused"), n
         n += 1
         try:
             out = sound_output(ws, n)
@@ -405,19 +411,113 @@ def connect_round(ws, n, methods):
     return result, n
 
 
+def validate_config():
+    values = {}
+    host = os.environ.get("LG_HOST", HOST)
+    if (len(host) > 253 or any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", part)
+                               for part in host.split("."))):
+        raise ValueError("LG_HOST must be a host name or IPv4 address, without scheme or port")
+    values["HOST"] = host
+    values["SONOS_BT"] = validate_bt(os.environ.get("SONOS_BT", SONOS_BT))
+    for name, current, minimum, maximum in (("WARMUP", WARMUP, 0, 300),
+                                            ("STABILITY_SECONDS", STABILITY_SECONDS, 10, 60)):
+        try:
+            value = float(os.environ.get(name, current))
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be numeric") from None
+        if not minimum <= value <= maximum:
+            raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        values[name] = value
+    keys = parse_keys(os.environ.get("MENU_KEYS", ",".join(MENU_KEYS)))
+    if any(key not in {"UP", "DOWN", "LEFT", "RIGHT", "ENTER", "EXIT", "BACK", "HOME"} for key in keys):
+        raise ValueError("MENU_KEYS contains an unsupported key")
+    values["MENU_KEYS"] = keys
+    for name in ("AUTO_RECOVER_BLIPS", "MENU_FALLBACK", "ALLOW_INSECURE_TLS"):
+        text = os.environ.get(name, "1" if globals()[name] else "0")
+        if text not in ("0", "1"):
+            raise ValueError(f"{name} must be 0 or 1")
+        values[name] = text == "1"
+    fingerprint = os.environ.get("TLS_FINGERPRINT", TLS_FINGERPRINT).replace(":", "").lower()
+    if fingerprint and not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise ValueError("TLS_FINGERPRINT must be SHA256")
+    if not fingerprint and not values["ALLOW_INSECURE_TLS"]:
+        raise ValueError("TLS pin or explicit insecure-LAN opt-in required")
+    values["TLS_FINGERPRINT"] = fingerprint
+    values["MENU_PROFILE"] = os.environ.get("MENU_PROFILE", MENU_PROFILE)
+    if values["MENU_FALLBACK"] and values["MENU_PROFILE"] != "hu710qke-webos24":
+        raise ValueError("MENU_FALLBACK requires the measured MENU_PROFILE")
+    globals().update(values)
+
+
+def read_key():
+    if os.name != "nt" and CK_FILE.stat().st_mode & 0o077:
+        raise ValueError("client-key.txt must have permissions 0600")
+    key = CK_FILE.read_text().strip()
+    if not key:
+        raise ValueError("client-key.txt is empty")
+    return key
+
+
+def set_paused(paused):
+    if paused:
+        PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PAUSE_FILE.touch(mode=0o600, exist_ok=True)
+    else:
+        PAUSE_FILE.unlink(missing_ok=True)
+
+
+def last_attempt():
+    try:
+        # Bounded input even if an older unrotated log exists.
+        with LOG_FILE.open("rb") as stream:
+            stream.seek(max(0, LOG_FILE.stat().st_size - 65536))
+            lines = stream.read(65536).decode("utf-8", errors="replace").splitlines()
+        for line in reversed(lines):
+            match = re.search(r"attempt=(\d+) method=(luna|menu) evidence=([A-Z_]+) reason=([a-z_]+)", line)
+            if match:
+                return dict(zip(("attempt", "method", "evidence", "reason"), match.groups()))
+    except OSError:
+        pass
+    return None
+
+
+def diagnose():
+    result = {"reachable": reachable(), "paired": False, "paused": PAUSE_FILE.exists(),
+              "evidence": "UNKNOWN", "identity": "unverified", "audio": "unverified",
+              "last_attempt": last_attempt()}
+    if not result["reachable"]:
+        return result
+    ws = None
+    try:
+        key = read_key()
+        ws = open_ws()
+        register(ws, key)
+        result["paired"] = True
+        output = sound_output(ws, 1)
+        result["output"] = output
+        result["evidence"] = "BT_ROUTE_SELECTED" if output == TARGET else "UNKNOWN"
+    except Exception as exc:
+        result["reason"] = exc.__class__.__name__
+    finally:
+        close(ws)
+    return result
+
+
 def main():
     try:
-        global SONOS_BT
-        SONOS_BT = validate_bt(SONOS_BT)
-        validate_tls_policy()
+        validate_config()
     except ValueError as e:
         log(f"FATAL: {e}")
-        sys.exit(1)
+        sys.exit(2)
     log(f"=== watcher demarre (cible {TARGET} sur {HOST}) ===")
     if not CK_FILE.exists():
         log(f"FATAL: {CK_FILE} absent — lancer tools/pair.py")
         sys.exit(1)
-    ck = CK_FILE.read_text().strip()
+    try:
+        ck = read_key()
+    except (OSError, ValueError) as exc:
+        log(f"FATAL: key_invalid ({exc.__class__.__name__})")
+        sys.exit(2)
 
     tracker = PowerTracker()
     adopted = True      # projecteur deja allume au demarrage du service : jamais de touches
@@ -437,6 +537,9 @@ def main():
             log(f"projecteur detecte — warmup {WARMUP} s...")
             adopted, had_miss, last_bt = False, False, False
             time.sleep(WARMUP)
+        if PAUSE_FILE.exists():
+            time.sleep(POLL)
+            continue
         if not tracker.online:
             time.sleep(SCAN)
             continue
@@ -511,5 +614,40 @@ def main():
         time.sleep(POLL)
 
 
+def cli():
+    parser = argparse.ArgumentParser(description="Local Sonos recovery; diagnostics never mutate audio")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--diagnose", action="store_true")
+    group.add_argument("--pause", action="store_true")
+    group.add_argument("--resume", action="store_true")
+    group.add_argument("--reconnect-now", action="store_true")
+    args = parser.parse_args()
+    if args.pause or args.resume:
+        set_paused(args.pause)
+        return 0
+    try:
+        validate_config()
+        if args.diagnose:
+            print(json.dumps(diagnose(), sort_keys=True))
+            return 0
+        if args.reconnect_now:
+            if PAUSE_FILE.exists():
+                raise ValueError("resume before reconnect-now")
+            ws = None
+            try:
+                ws = open_ws()
+                register(ws, read_key())
+                result, _ = connect_round(ws, 1, ["luna", "luna"])
+                print(json.dumps(result._asdict()))
+                return 0 if result.route_stable else 1
+            finally:
+                close(ws)
+        main()
+        return 0
+    except (OSError, ValueError, SessionError):
+        print("Configuration, key or session invalid; use --help and the operations guide.", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(cli())

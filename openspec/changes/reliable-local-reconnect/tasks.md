@@ -10,5 +10,10 @@
 - [x] 4.1 Registration validation, absolute deadlines, TLS policy and bounded destination-checked screenshots.
 
 ## 5. Operations
-- [ ] 5.1 Configuration, controls, read-only diagnostic, docs, rollback and supported-Python CI.
+- [x] 5.1 Configuration, controls, read-only diagnostic, docs, rollback and supported-Python CI.
 - [ ] 5.2 Verify five PRs; record hardware validation gaps without fabricated results.
+
+## 6. Hardware acceptance (not performed)
+- [ ] 6.1 Explicit candidate deployment and observed boot/popup/audio campaign.
+- [ ] 6.2 Validate strict TLS endpoint compatibility and minimal permission experiments.
+- [ ] 6.3 Record 48 real hours of resource/log endurance before stable release.

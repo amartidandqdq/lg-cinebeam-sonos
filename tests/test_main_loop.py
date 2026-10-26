@@ -47,6 +47,7 @@ def sim(watcher, monkeypatch, tmp_path):
 
     ck = tmp_path / "ck.txt"
     ck.write_text("key")
+    ck.chmod(0o600)
     monkeypatch.setattr(watcher.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
     monkeypatch.setattr(watcher.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(watcher, "reachable", reachable)
@@ -55,6 +56,7 @@ def sim(watcher, monkeypatch, tmp_path):
     monkeypatch.setattr(watcher, "luna_connect", connector("luna"))
     monkeypatch.setattr(watcher, "menu_connect", connector("menu"))
     monkeypatch.setattr(watcher, "CK_FILE", ck)
+    monkeypatch.setattr(watcher, "PAUSE_FILE", tmp_path / "paused")
     monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
     monkeypatch.setattr(watcher, "SONOS_BT", "12:34:56:78:9a:bc")
     monkeypatch.setattr(watcher, "ALLOW_INSECURE_TLS", True)
