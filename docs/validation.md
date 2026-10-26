@@ -20,7 +20,7 @@ Not deployed. No physical test result is claimed. The user's actual setup uses B
 | Route transient/stable/status timeout | Exact-route stability simulated | Pending |
 | Popup yes focus / blank / wrong focus / unreadable | Synthetic images; no private captures | Real reference-capture validation pending |
 | Registration refusal/invalid payload, pin mismatch | Mocks with no device commands | Pending |
-| Strict screenshot/WSS certificate policy | Unit boundaries tested | Endpoint certificate compatibility pending |
+| Strict screenshot/WSS certificate policy | Unit boundaries and ephemeral loopback TLS test | Endpoint certificate compatibility pending |
 | Pair permissions | Existing manifest preserved; refusal preserves key | Minimal subset pending, no working-key replacement |
 | Install, key/config preservation, backup | Temporary home-directory regression | Real candidate upgrade/rollback pending |
 | 48-hour resource/log endurance | Log size bounded; no inference from fake clock | 0 hours; pending |

@@ -217,20 +217,30 @@ DEFAULT_MENU_KEYS = ["DOWN", "ENTER", "RIGHT", "DOWN", "ENTER", "DOWN", "DOWN", 
 MENU_KEYS = parse_keys(os.environ.get("MENU_KEYS", ""))
 
 
-def menu_connect(ws, n):
+def audio_action_allowed(ws, n):
     if PAUSE_FILE.exists():
+        return False
+    kind = classify_output(sound_output(ws, n))
+    return not PAUSE_FILE.exists() and kind in ("TARGET", "DEFAULT_FALLBACK")
+
+
+def menu_connect(ws, n):
+    if not audio_action_allowed(ws, n + 2):
         return
     call(ws, n, "ssap://system.launcher/launch", {"id": "com.palm.app.settings"})
     time.sleep(7)  # 1er lancement apres boot lent : 3 s ne suffisaient pas
+    if not audio_action_allowed(ws, n + 3):
+        return
     path = json.loads(call(ws, n + 1, "ssap://com.webos.service.networkinput/getPointerInputSocket"))["payload"]["socketPath"]
     with secure_connect(path) as sp:
-        for key in MENU_KEYS:
-            if PAUSE_FILE.exists():
+        for index, key in enumerate(MENU_KEYS):
+            if not audio_action_allowed(ws, n + 4 + index):
                 return
             sp.send(f"type:button\nname:{key}\n\n")
             time.sleep(1.2)
         time.sleep(6)
-        sp.send("type:button\nname:EXIT\n\n")
+        if audio_action_allowed(ws, n + 40):
+            sp.send("type:button\nname:EXIT\n\n")
 
 
 SONOS_BT = os.environ.get("SONOS_BT", "")  # adresse BT de l'Arc Ultra (= MAC Wi-Fi)
@@ -373,8 +383,9 @@ def press(ws, n, key):
         return
     path = json.loads(call(ws, n, "ssap://com.webos.service.networkinput/getPointerInputSocket"))["payload"]["socketPath"]
     with secure_connect(path) as sp:
-        sp.send(f"type:button\nname:{key}\n\n")
-        time.sleep(0.5)
+        if audio_action_allowed(ws, n + 1):
+            sp.send(f"type:button\nname:{key}\n\n")
+            time.sleep(0.5)
 
 
 def close(ws):
@@ -467,6 +478,8 @@ def validate_config():
             raise ValueError(f"{name} must be between {minimum} and {maximum}")
         values[name] = value
     keys = parse_keys(os.environ.get("MENU_KEYS", ",".join(MENU_KEYS)))
+    if len(keys) > 32:
+        raise ValueError("MENU_KEYS must contain at most 32 keys")
     if any(key not in {"UP", "DOWN", "LEFT", "RIGHT", "ENTER", "EXIT", "BACK", "HOME"} for key in keys):
         raise ValueError("MENU_KEYS contains an unsupported key")
     values["MENU_KEYS"] = keys

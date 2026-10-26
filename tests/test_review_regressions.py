@@ -74,3 +74,57 @@ def test_screenshot_total_deadline_rejects_slow_body(watcher, monkeypatch):
     monkeypatch.setattr(watcher.http.client, 'HTTPConnection', Connection)
     with pytest.raises((TimeoutError, watcher.SessionError)):
         watcher.screenshot_bytes('http://192.168.1.2:3000/image')
+
+
+@pytest.mark.parametrize('change', ['output', 'pause'])
+def test_pointer_setup_change_prevents_button(watcher, monkeypatch, tmp_path, change):
+    pause = tmp_path/'paused'
+    out = ['tv_speaker']
+    sent = []
+    monkeypatch.setattr(watcher, 'PAUSE_FILE', pause)
+    monkeypatch.setattr(watcher, 'sound_output', lambda *a: out[0])
+    def pointer(*args):
+        if change == 'output':
+            out[0] = 'external_arc'
+        else:
+            pause.touch()
+        return json.dumps({'payload': {'socketPath': 'wss://test/'}})
+    class Pointer:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def send(self, content):
+            sent.append(content)
+    monkeypatch.setattr(watcher, 'call', pointer)
+    monkeypatch.setattr(watcher, 'secure_connect', lambda *a: Pointer())
+    watcher.press(None, 1, 'ENTER')
+    assert sent == []
+
+
+@pytest.mark.parametrize('change', ['output_during_launch', 'pause_before_exit'])
+def test_menu_respects_changes_during_waits(watcher, monkeypatch, tmp_path, change):
+    pause = tmp_path/'paused'
+    out = ['tv_speaker']
+    sent = []
+    monkeypatch.setattr(watcher, 'PAUSE_FILE', pause)
+    monkeypatch.setattr(watcher, 'sound_output', lambda *a: out[0])
+    monkeypatch.setattr(watcher, 'call', lambda *a: '{"payload":{"socketPath":"wss://test/"}}')
+    def sleep(seconds):
+        if seconds == 7 and change == 'output_during_launch':
+            out[0] = 'external_arc'
+        if seconds == 6 and change == 'pause_before_exit':
+            pause.touch()
+    class Pointer:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+        def send(self, content):
+            sent.append(content)
+    monkeypatch.setattr(watcher.time, 'sleep', sleep)
+    monkeypatch.setattr(watcher, 'secure_connect', lambda *a: Pointer())
+    watcher.menu_connect(None, 1)
+    assert not any('name:EXIT' in content for content in sent)
+    if change == 'output_during_launch':
+        assert sent == []

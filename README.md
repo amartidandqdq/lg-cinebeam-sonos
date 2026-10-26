@@ -88,7 +88,7 @@ After loading `watcher.env` as above:
 ```sh
 PY=~/.venvs/sonos-watcher/bin/python
 WATCHER=~/sonos-watcher/sonos-watcher.py
-"$PY" "$WATCHER" --diagnose       # read-only JSON; no connection attempts or keys
+"$PY" "$WATCHER" --diagnose       # read-only JSON; no audio mutations or key disclosure
 "$PY" "$WATCHER" --pause          # persistent local pause flag
 "$PY" "$WATCHER" --resume         # remove pause; does not force a reconnect
 # For an explicit reconnect: pause and stop the daemon first, avoiding two active controllers.
