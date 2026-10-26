@@ -25,6 +25,7 @@ import sys
 import time
 import urllib.request
 from datetime import datetime
+from typing import NamedTuple
 
 from PIL import Image
 from websockets.sync.client import connect
@@ -40,6 +41,7 @@ WARMUP = int(os.environ.get("WARMUP", "25"))  # s d'attente apres l'allumage (se
 OFF_AFTER = 4      # sondes ratees d'affilee avant de conclure "eteint" (coupure LAN != extinction)
 BLIP_POLL = 5      # s entre deux sondes quand une sonde vient d'echouer
 RETRY_DELAYS = (120, 600, 1800)  # s avant chaque reprise apres un echec ; ensuite on abandonne
+STABILITY_SECONDS = float(os.environ.get("STABILITY_SECONDS", "10"))
 AUTO_RECOVER_BLIPS = os.environ.get("AUTO_RECOVER_BLIPS", "0") == "1"
 
 
@@ -216,33 +218,60 @@ def sound_output(ws, n):
     return json.loads(call(ws, n, "ssap://audio/getStatus"))["payload"]["volumeStatus"]["soundOutput"]
 
 
-def connect_round(ws, n, methods):
-    """Un tour de reconnexion. Retourne (sortie_bt_active, n)."""
-    # changeSoundOutput ne fait que changer le reglage : apres un boot a froid le lien BT
-    # n'existe pas et le projecteur annule. On ouvre d'abord le lien A2DP via luna
-    # (invisible) ; en secours on rejoue le menu Sound Out -> Connect a la telecommande.
-    for i, how in enumerate(methods, 1):
+class RouteResult(NamedTuple):
+    evidence: str
+    reason: str
+    last_output: str | None = None
+    link_confirmed: bool = False
+    audio_verified: bool = False
+
+    @property
+    def route_stable(self):
+        return self.evidence == "BT_ROUTE_STABLE"
+
+
+def observe_route(ws, n):
+    """Three exact-route readings spanning at least ten seconds. Identity is not proved."""
+    out = None
+    for sample in range(3):
+        if sample:
+            time.sleep(max(10, STABILITY_SECONDS) / 2)
+        n += 1
         try:
-            (luna_connect if how == "luna" else menu_connect)(ws, n)
-        except Exception as e:
-            log(f"  tentative {i}/{len(methods)} ({how}): echec ({e.__class__.__name__})")
-        n += 100
-        active = False
-        for _ in range(6):
-            time.sleep(2)
-            n += 1
+            out = sound_output(ws, n)
+        except Exception:
+            return RouteResult("UNKNOWN", "status_timeout"), n
+        if out != TARGET:
+            reason = "output_rolled_back" if out == "tv_speaker" else "other_or_unknown_output"
+            return RouteResult("FAILED" if out == "tv_speaker" else "UNKNOWN", reason, out), n
+    return RouteResult("BT_ROUTE_STABLE", "identity_and_audio_unverified", out), n
+
+
+def connect_round(ws, n, methods):
+    result = RouteResult("UNKNOWN", "no_attempt")
+    for i, how in enumerate(methods, 1):
+        n += 1
+        try:
+            out = sound_output(ws, n)
+        except Exception:
+            return RouteResult("UNKNOWN", "status_timeout"), n
+        if classify_output(out) not in ("TARGET", "DEFAULT_FALLBACK"):
+            return RouteResult("UNKNOWN", "other_or_unknown_output", out), n
+        if out != TARGET:
             try:
-                active = sound_output(ws, n).startswith("bt_")
-            except Exception:
-                continue
-            if active:
-                break
-        # Le projecteur annonce la sortie, pas l'audio reellement entendu : d'ou "sortie BT active".
-        log(f"  tentative {i}/{len(methods)} ({how}): {'SORTIE BT ACTIVE' if active else 'pas de connexion'}")
-        if active:
-            return True, n
+                (luna_connect if how == "luna" else menu_connect)(ws, n + 1)
+            except Exception as e:
+                log(f"attempt={i} method={how} reason={e.__class__.__name__}")
+                # A failed session must not be reused for further mutations.
+                return RouteResult("UNKNOWN", "command_failed"), n + 100
+        n += 100
+        time.sleep(2)
+        result, n = observe_route(ws, n)
+        log(f"attempt={i} method={how} evidence={result.evidence} reason={result.reason}")
+        if result.route_stable or result.reason in ("other_or_unknown_output", "status_timeout"):
+            return result, n
         time.sleep(5)
-    return False, n
+    return result, n
 
 
 def main():
@@ -334,9 +363,11 @@ def main():
             handled = True
         else:
             log(f"sortie actuelle {out} -> connexion Sonos...")
-            connected, n = connect_round(ws, n, methods_for(failed_rounds, adopted))
-            if connected:
+            result, n = connect_round(ws, n, methods_for(failed_rounds, adopted))
+            if result.route_stable:
                 handled, last_bt = True, True
+            elif result.reason == "other_or_unknown_output":
+                handled = True
             else:
                 failed_rounds += 1
                 delay = retry_delay(failed_rounds)
