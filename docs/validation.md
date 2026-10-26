@@ -18,6 +18,25 @@ are green. These are automated candidate results, not physical-device evidence.
 Pending hardware acceptance is tracked separately in
 [issue #11](https://github.com/amartidandqdq/lg-cinebeam-sonos/issues/11).
 
+### Final software acceptance
+
+Source revision `73c1731a859308d785a10271281f92f6bd487680` passes **81 tests on each of
+Python 3.11, 3.12 and 3.13** with the pinned production dependencies, including the
+OpenSSL/loopback TLS and POSIX-shell tests skipped on the local Windows environment.
+[Final source CI](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/runs/40384523964)
+and [Gitleaks](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/runs/40384523915)
+passed. Ruff and strict OpenSpec validation passed as well.
+
+Independent read-only review returned **ship** for this source revision: no remaining
+blocker within the requested software scope. Earlier findings were reproduced and fixed:
+output/pause changes during UI setup, final-read pause handling, end-to-end capture timeout,
+stale diagnostic evidence and completion of connection-close HTTP bodies. The final review
+also exercised 20 additional HTTP completion/size/deadline/cleanup checks. These supplementary
+checks are reviewer evidence, not added to the 81-test repository count.
+
+Software acceptance does not waive hardware acceptance. The five PRs remain a reviewable
+chain; no merge, stable 0.3.0 tag or candidate deployment is asserted by this record.
+
 | Scenario | Automated evidence | Candidate hardware status |
 |---|---|---|
 | Startup observation on tv_speaker / ARC / other BT | Simulated, zero mutation | Pending |

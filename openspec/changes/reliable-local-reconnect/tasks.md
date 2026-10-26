@@ -11,7 +11,7 @@
 
 ## 5. Operations
 - [x] 5.1 Configuration, controls, read-only diagnostic, docs, rollback and supported-Python CI.
-- [ ] 5.2 Verify five PRs; record hardware validation gaps without fabricated results.
+- [x] 5.2 Verify five PRs; record hardware validation gaps without fabricated results.
 
 ## 6. Hardware acceptance (not performed)
 - [ ] 6.1 Explicit candidate deployment and observed boot/popup/audio campaign.
