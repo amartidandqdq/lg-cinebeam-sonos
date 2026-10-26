@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — lot 3
+- Recognize focused popup with median pixel patches; unreadable capture is UNKNOWN.
+- Disable menu fallback by default; explicitly enabled known profile allows one sequence.
+- Test synthetic positive, blank, wrong-focus, corrupt and isolated-pixel screenshots.
+
+
 ## Unreleased — lot 2
 - Require three exact-target readings over at least ten seconds.
 - Report stable route separately from unverified device identity, link and audio.

@@ -58,6 +58,8 @@ def sim(watcher, monkeypatch, tmp_path):
     monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
     monkeypatch.setattr(watcher, "SONOS_BT", "12:34:56:78:9a:bc")
     monkeypatch.setattr(watcher, "AUTO_RECOVER_BLIPS", False)
+    monkeypatch.setattr(watcher, "MENU_FALLBACK", True)
+    monkeypatch.setattr(watcher, "MENU_PROFILE", "hu710qke-webos24")
 
     def run():
         if st["start_cycle"]:
@@ -82,9 +84,9 @@ def test_fresh_power_on_replays_menu_once_then_luna_only_retries(sim):
     sim["connect_works"] = False
     sim["script"] = [False] * 4 + [True]  # extinction confirmee puis allumage
     calls = sim["run"]()
-    assert calls[:4] == ["luna", "luna", "menu", "menu"]
-    assert calls.count("menu") == 2
-    assert len(calls) == 4 + 3 * 2
+    assert calls[:3] == ["luna", "luna", "menu"]
+    assert calls.count("menu") == 1
+    assert len(calls) == 3 + 3 * 2
 
 
 def test_lan_blip_does_not_trigger_a_new_reconnect(sim):
@@ -122,7 +124,7 @@ def test_repeated_short_cycles_reconnect_once_each(sim):
 def test_manual_hdmi_during_retry_wait_cancels_retries(sim):
     sim["connect_works"] = False
     sim["script"] = [True, {"out": "external_arc"}]
-    assert sim["run"]() == ["luna", "luna", "menu", "menu"]
+    assert sim["run"]() == ["luna", "luna", "menu"]
 
 
 def test_registration_failure_closes_socket_before_retry(sim, watcher, monkeypatch):
