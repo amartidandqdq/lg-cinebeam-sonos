@@ -1,6 +1,9 @@
 # Changelog
 
 ## 0.3.0-rc.1 — not deployed
+- Independent review: recheck output before popup confirmation, enforce a total screenshot
+  deadline and record terminal evidence consistently after failed attempts.
+- Add a loopback TLS/websocket integration test using the pinned production dependency.
 - Add explicit pause/resume/reconnect controls and read-only JSON diagnostics.
 - Validate configuration and private key permissions; rotate local logs.
 - Install code/unit with backups while preserving existing key and config.

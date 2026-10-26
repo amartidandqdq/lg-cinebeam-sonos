@@ -16,6 +16,7 @@ import re
 import socket
 import ssl
 import sys
+import threading
 import time
 import urllib.parse
 from datetime import datetime
@@ -248,10 +249,16 @@ def luna_connect(ws, n):
     # Sans validation le son reste sur le projecteur : on detecte le popup et on appuie sur OK.
     for k in range(8):
         time.sleep(2)
+        if PAUSE_FILE.exists() or classify_output(sound_output(ws, n + 40 + k)) not in ("TARGET", "DEFAULT_FALLBACK"):
+            return
         state = popup_state(ws, n + 10 + k)
         if state == "UNKNOWN":
             log("method=luna reason=screenshot_unavailable")
         if state == "YES_FOCUSED":
+            # Capturing the screen can take seconds: recheck immediately before confirmation.
+            if (PAUSE_FILE.exists()
+                    or classify_output(sound_output(ws, n + 50 + k)) not in ("TARGET", "DEFAULT_FALLBACK")):
+                return
             log("  popup de connexion detecte -> Yes")
             press(ws, n + 30, "ENTER")
             time.sleep(3)
@@ -284,8 +291,26 @@ def screenshot_bytes(uri):
     factory = http.client.HTTPSConnection if https else http.client.HTTPConnection
     kwargs = {"context": ctx} if https else {}
     connection = factory(parsed.hostname, parsed.port, timeout=8, **kwargs)
+    deadline = time.monotonic() + 8
+    timer = None
     try:
         connection.connect()
+        transport_socket = getattr(connection, "sock", None)
+
+        def abort_download():
+            if transport_socket is not None:
+                try:
+                    transport_socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("screenshot total deadline")
+        # HTTP header parsing also performs multiple reads: interrupt the actual socket at deadline.
+        timer = threading.Timer(remaining, abort_download)
+        timer.daemon = True
+        timer.start()
         if https and TLS_FINGERPRINT:
             verify_certificate(connection.sock.getpeercert(binary_form=True))
         connection.request("GET", urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, "")))
@@ -295,11 +320,24 @@ def screenshot_bytes(uri):
         length = response.getheader("Content-Length")
         if length and int(length) > MAX_SCREENSHOT_BYTES:
             raise ValueError("screenshot too large")
-        content = response.read(MAX_SCREENSHOT_BYTES + 1)
-        if len(content) > MAX_SCREENSHOT_BYTES:
-            raise ValueError("screenshot too large")
-        return content
+        content = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("screenshot total deadline")
+            if transport_socket is not None:
+                transport_socket.settimeout(remaining)
+            chunk = response.read1(min(65536, MAX_SCREENSHOT_BYTES + 1 - len(content)))
+            if time.monotonic() >= deadline:
+                raise TimeoutError("screenshot total deadline")
+            if not chunk:
+                return bytes(content)
+            content.extend(chunk)
+            if len(content) > MAX_SCREENSHOT_BYTES:
+                raise ValueError("screenshot too large")
     finally:
+        if timer is not None:
+            timer.cancel()
         connection.close()
 
 
@@ -398,7 +436,7 @@ def connect_round(ws, n, methods):
             try:
                 (luna_connect if how == "luna" else menu_connect)(ws, n + 1)
             except Exception as e:
-                log(f"attempt={i} method={how} reason={e.__class__.__name__}")
+                log(f"attempt={i} method={how} evidence=UNKNOWN reason=command_failed detail={e.__class__.__name__}")
                 # A failed session must not be reused for further mutations.
                 return RouteResult("UNKNOWN", "command_failed"), n + 100
         n += 100
