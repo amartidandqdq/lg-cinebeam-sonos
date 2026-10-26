@@ -44,6 +44,8 @@ def test_screenshot_total_deadline_rejects_slow_body(watcher, monkeypatch):
     monkeypatch.setattr(watcher, 'TLS_FINGERPRINT', '')
     class Response:
         status = 200
+        def isclosed(self):
+            return False
         def getheader(self, name):
             return None
         def read(self, size):

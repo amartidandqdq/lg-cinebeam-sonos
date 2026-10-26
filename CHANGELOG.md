@@ -1,6 +1,8 @@
 # Changelog
 
 ## 0.3.0-rc.1 — not deployed
+- Accept completed Content-Length screenshots when HTTP/1.0 or Connection: close has
+  closed the socket; cover length, EOF and chunked loopback responses.
 - Final boundary regressions: recheck pause after the last route read; bound DNS/TCP/TLS
   together with screenshot I/O using a killable, reaped local worker.
 - Independent review: recheck output before popup confirmation, enforce a total screenshot

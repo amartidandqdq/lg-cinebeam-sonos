@@ -366,6 +366,8 @@ def _download_screenshot(uri):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("screenshot total deadline")
+            if response.isclosed():
+                return bytes(content)
             if transport_socket is not None:
                 transport_socket.settimeout(remaining)
             chunk = response.read1(min(65536, MAX_SCREENSHOT_BYTES + 1 - len(content)))

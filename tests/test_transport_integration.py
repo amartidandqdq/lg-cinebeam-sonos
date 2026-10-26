@@ -1,5 +1,6 @@
 """Exercise the pinned websocket dependency against an ephemeral loopback TLS server."""
 import hashlib
+import http.server
 import shutil
 import socket
 import ssl
@@ -106,3 +107,41 @@ module._download_screenshot(options["uri"])
         stop.set()
         listener.close()
         thread.join(timeout=3)
+
+
+@pytest.mark.parametrize('version,framing', [
+    ('HTTP/1.0', 'length'), ('HTTP/1.0', 'eof'),
+    ('HTTP/1.1', 'length'), ('HTTP/1.1', 'eof'), ('HTTP/1.1', 'chunked'),
+])
+def test_connection_close_screenshot_completes(watcher, monkeypatch, version, framing):
+    body = b'\x89PNG\r\n\x00\xff-test-binary'
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = version
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Connection', 'close')
+            if framing == 'length':
+                self.send_header('Content-Length', str(len(body)))
+            if framing == 'chunked':
+                self.send_header('Transfer-Encoding', 'chunked')
+            self.end_headers()
+            self.wfile.write((f'{len(body):x}\r\n'.encode() + body + b'\r\n0\r\n\r\n')
+                             if framing == 'chunked' else body)
+            self.close_connection = True
+        def log_message(self, *args):
+            pass
+    with http.server.HTTPServer(('127.0.0.1', 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        original = watcher.http.client.HTTPConnection
+        def connection(host, port, **options):
+            return original('127.0.0.1', server.server_port, **options)
+        monkeypatch.setattr(watcher.http.client, 'HTTPConnection', connection)
+        monkeypatch.setattr(watcher, 'HOST', '127.0.0.1')
+        monkeypatch.setattr(watcher, 'ALLOW_INSECURE_TLS', True)
+        monkeypatch.setattr(watcher, 'TLS_FINGERPRINT', '')
+        try:
+            assert watcher._download_screenshot('http://127.0.0.1:3000/image') == body
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
