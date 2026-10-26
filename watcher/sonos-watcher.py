@@ -40,6 +40,15 @@ WARMUP = int(os.environ.get("WARMUP", "25"))  # s d'attente apres l'allumage (se
 OFF_AFTER = 4      # sondes ratees d'affilee avant de conclure "eteint" (coupure LAN != extinction)
 BLIP_POLL = 5      # s entre deux sondes quand une sonde vient d'echouer
 RETRY_DELAYS = (120, 600, 1800)  # s avant chaque reprise apres un echec ; ensuite on abandonne
+AUTO_RECOVER_BLIPS = os.environ.get("AUTO_RECOVER_BLIPS", "0") == "1"
+
+
+def classify_output(output):
+    if output == TARGET:
+        return "TARGET"
+    if output == "tv_speaker":
+        return "DEFAULT_FALLBACK"
+    return "OTHER_USER_OUTPUT" if isinstance(output, str) and output else "UNKNOWN"
 
 # ponytail: TLS non verifie, le projecteur presente un certificat auto-signe. Risque accepte sur
 # un LAN domestique ; ne pas exposer le port 3001 hors du reseau local.
@@ -300,9 +309,13 @@ def main():
             time.sleep(SCAN)
             continue
 
-        is_bt = out.startswith("bt_")
+        kind = classify_output(out)
+        is_bt = kind == "TARGET"
+        if adopted and not handled:
+            log(f"observation au demarrage: {kind}; identite BT non verifiee")
+            handled = True
         if handled:
-            if had_miss and last_bt and not is_bt:
+            if AUTO_RECOVER_BLIPS and had_miss and last_bt and kind == "DEFAULT_FALLBACK":
                 # BT actif avant la coupure, autre sortie au retour : cela peut etre un redemarrage
                 # plus court que OFF_AFTER. On reconnecte par luna seul, sans navigation dans les menus.
                 log("sortie BT perdue apres une coupure — reconnexion (luna seul)")
@@ -314,9 +327,9 @@ def main():
                 continue
         had_miss = False
         if is_bt:
-            log("sortie audio deja sur la Sonos — rien a faire")
+            log("route BT cible selectionnee; identite non verifiee")
             handled, last_bt = True, True
-        elif failed_rounds and out != "tv_speaker":
+        elif kind != "DEFAULT_FALLBACK":
             log(f"sortie changee a la main ({out}) — reprises annulees")
             handled = True
         else:

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — lot 1
+- Observe at startup; preserve every non-default output from the first reading.
+- Default to no action after ambiguous short outages; aggressive recovery is opt-in.
+- Classify exact target, fallback, other and unknown routes. No BT identity claim.
+
+
 ## 0.2.2 - 2026-10-26
 
 ### Fixed
