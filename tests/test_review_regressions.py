@@ -73,7 +73,7 @@ def test_screenshot_total_deadline_rejects_slow_body(watcher, monkeypatch):
             pass
     monkeypatch.setattr(watcher.http.client, 'HTTPConnection', Connection)
     with pytest.raises((TimeoutError, watcher.SessionError)):
-        watcher.screenshot_bytes('http://192.168.1.2:3000/image')
+        watcher._download_screenshot('http://192.168.1.2:3000/image')
 
 
 @pytest.mark.parametrize('change', ['output', 'pause'])
@@ -128,3 +128,35 @@ def test_menu_respects_changes_during_waits(watcher, monkeypatch, tmp_path, chan
     assert not any('name:EXIT' in content for content in sent)
     if change == 'output_during_launch':
         assert sent == []
+
+
+def test_pause_during_final_route_read_prevents_write(watcher, monkeypatch, tmp_path):
+    pause = tmp_path/'paused'
+    writes = []
+    monkeypatch.setattr(watcher, 'PAUSE_FILE', pause)
+    monkeypatch.setattr(watcher.time, 'sleep', lambda *a: None)
+    monkeypatch.setattr(watcher, 'popup_state', lambda *a: 'ABSENT')
+    def output(ws, n):
+        if n == 4:  # final read in luna_connect(ws, 1)
+            pause.touch()
+        return 'tv_speaker'
+    def call(ws, n, uri, payload=None):
+        if uri.endswith('changeSoundOutput'):
+            writes.append(uri)
+        return json.dumps({'payload': {'alertId': 'test'}})
+    monkeypatch.setattr(watcher, 'sound_output', output)
+    monkeypatch.setattr(watcher, 'call', call)
+    watcher.luna_connect(None, 1)
+    assert writes == []
+
+
+def test_screenshot_worker_has_total_timeout(watcher, monkeypatch):
+    monkeypatch.setattr(watcher, 'ALLOW_INSECURE_TLS', True)
+    monkeypatch.setattr(watcher, 'TLS_FINGERPRINT', '')
+    def slow_worker(command, **options):
+        assert options['timeout'] == 8
+        assert json.loads(options['input'])['uri'] == 'http://192.168.1.2:3000/image'
+        raise watcher.subprocess.TimeoutExpired(command, 8)
+    monkeypatch.setattr(watcher.subprocess, 'run', slow_worker)
+    with pytest.raises(TimeoutError, match='total deadline'):
+        watcher.screenshot_bytes('http://192.168.1.2:3000/image')

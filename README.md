@@ -117,7 +117,7 @@ Log lines include attempt/method/evidence/reason. The local log rotates at rough
 
 Choose a locally verified SHA256 pin or explicitly accept `ALLOW_INSECURE_TLS=1` on a trusted home LAN. There is no silent TOFU acceptance. Verify a certificate through an independent trusted local channel before pinning it; merely querying an untrusted network endpoint is not proof of identity. A mismatch fails before SSAP registration. Strict pin mode has **not** been checked on the projector; screenshot and WSS services may use different certificates.
 
-Screenshot destinations must match `LG_HOST`, use HTTP(S), no credentials/fragment, and allowed ports 80/443/3000/3001. Redirects, excessive encoded size (4 MB) and image dimensions (>8.5 MP) are rejected. HTTP screenshots require explicit insecure mode. Pointer sockets require WSS on the configured host/port. Do not expose the projector ports to the internet. Keys/config must remain private; runtime key permissions are checked on Linux.
+Screenshot destinations must match `LG_HOST`, use HTTP(S), no credentials/fragment, and allowed ports 80/443/3000/3001. Redirects, excessive encoded size (4 MB) and image dimensions (>8.5 MP) are rejected. A short-lived local Python worker is killed and reaped at the eight-second timeout, covering DNS, TCP, TLS, headers and body together (plus OS cleanup overhead). It receives only screenshot endpoint/policy options, never the SSAP key. HTTP screenshots require explicit insecure mode. Pointer sockets require WSS on the configured host/port. Do not expose the projector ports to the internet. Keys/config must remain private; runtime key permissions are checked on Linux.
 
 ## Upgrade, rollback and uninstall
 

@@ -15,6 +15,7 @@ import pathlib
 import re
 import socket
 import ssl
+import subprocess
 import sys
 import threading
 import time
@@ -273,7 +274,7 @@ def luna_connect(ws, n):
             press(ws, n + 30, "ENTER")
             time.sleep(3)
             break
-    if not PAUSE_FILE.exists() and classify_output(sound_output(ws, n + 3)) in ("TARGET", "DEFAULT_FALLBACK"):
+    if audio_action_allowed(ws, n + 3):
         call(ws, n + 2, "ssap://com.webos.service.apiadapter/audio/changeSoundOutput", {"output": TARGET})
 
 
@@ -295,6 +296,36 @@ def validate_screenshot_url(uri):
 
 
 def screenshot_bytes(uri):
+    """A killable worker bounds DNS, TCP, TLS, headers and body together."""
+    validate_tls_policy()
+    validate_screenshot_url(uri)
+    options = {"uri": uri, "host": HOST, "pin": TLS_FINGERPRINT, "insecure": ALLOW_INSECURE_TLS}
+    try:
+        result = subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).resolve()), "--capture-worker"],
+            input=json.dumps(options).encode(), capture_output=True, timeout=8, check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # run() kills and reaps the worker, including any stalled resolver/TLS operation.
+        raise TimeoutError("screenshot total deadline") from exc
+    if result.returncode or len(result.stdout) > MAX_SCREENSHOT_BYTES:
+        raise ValueError("screenshot worker failed or exceeded size limit")
+    return result.stdout
+
+
+def capture_worker():
+    global HOST, TLS_FINGERPRINT, ALLOW_INSECURE_TLS
+    try:
+        options = json.load(sys.stdin)
+        HOST, TLS_FINGERPRINT = options["host"], options["pin"]
+        ALLOW_INSECURE_TLS = options["insecure"]
+        sys.stdout.buffer.write(_download_screenshot(options["uri"]))
+        return 0
+    except Exception:
+        return 2  # No endpoint URLs, certificates, private content or exception details on stderr.
+
+
+def _download_screenshot(uri):
     validate_tls_policy()
     parsed = validate_screenshot_url(uri)
     https = parsed.scheme == "https"
@@ -701,4 +732,4 @@ def cli():
 
 
 if __name__ == "__main__":
-    sys.exit(cli())
+    sys.exit(capture_worker() if sys.argv[1:] == ["--capture-worker"] else cli())

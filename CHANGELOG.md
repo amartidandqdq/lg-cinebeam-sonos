@@ -1,6 +1,8 @@
 # Changelog
 
 ## 0.3.0-rc.1 — not deployed
+- Final boundary regressions: recheck pause after the last route read; bound DNS/TCP/TLS
+  together with screenshot I/O using a killable, reaped local worker.
 - Independent review: recheck output before popup confirmation, enforce a total screenshot
   deadline and record terminal evidence consistently after failed attempts.
 - Add a loopback TLS/websocket integration test using the pinned production dependency.
