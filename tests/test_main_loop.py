@@ -29,6 +29,9 @@ def sim(watcher, monkeypatch, tmp_path):
         if item == "manual":  # utilisateur choisit une autre sortie a la main
             st["out"] = "tv_speaker"
             return True
+        if item == "reboot":  # cycle d'alimentation plus court que l'hysterese : le lien BT est perdu
+            st["out"] = "tv_speaker"
+            return False
         return item
 
     def connector(how):
@@ -49,7 +52,7 @@ def sim(watcher, monkeypatch, tmp_path):
     monkeypatch.setattr(watcher, "menu_connect", connector("menu"))
     monkeypatch.setattr(watcher, "CK_FILE", ck)
     monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
-    monkeypatch.setattr(watcher, "SONOS_BT", "c4:38:75:1c:7d:a9")
+    monkeypatch.setattr(watcher, "SONOS_BT", "12:34:56:78:9a:bc")
 
     def run():
         with pytest.raises(Stop):
@@ -85,3 +88,13 @@ def test_real_power_cycle_reconnects_again(sim):
     sim["script"] = [True, "manual", False, False, False, False, True]
     calls = sim["run"]()
     assert calls == ["luna", "luna"]  # 1 reconnexion au demarrage + 1 apres le vrai cycle
+
+
+def test_short_power_cycle_under_the_hysteresis_still_reconnects(sim):
+    sim["script"] = [True, "reboot", True]  # BT perdu pendant la coupure -> reconnexion (luna seul)
+    assert sim["run"]() == ["luna", "luna"]
+
+
+def test_blip_with_bt_still_active_does_nothing(sim):
+    sim["script"] = [True, False, True]
+    assert sim["run"]() == ["luna"]

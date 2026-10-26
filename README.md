@@ -48,6 +48,7 @@ It runs **once per power-on**. If you switch the output by hand afterwards, the 
 ### Safety rules
 
 - A **short LAN drop is not a power-off**: the projector is declared off only after 4 failed probes in a row.
+- If BT was active before a missed probe and is lost when the projector returns, reconnect with `luna` only. This also covers power cycles shorter than the power-off threshold; an unchanged output does not trigger a reconnect.
 - **Remote keys are replayed once at most**, on the first round after a real power-on. Never on a retry, and never when the service restarts on a projector that is already on.
 - After a failed round: up to 3 retries (2, 10, 30 min), invisible `luna` only. Then it gives up until the next power-on.
 - Retries stop as soon as the sound output was changed by hand.

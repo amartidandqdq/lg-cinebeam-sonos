@@ -44,7 +44,7 @@ def test_validate_bt_rejects_unset_placeholder_and_malformed(watcher, addr):
 
 
 def test_validate_bt_accepts_real_address(watcher):
-    assert watcher.validate_bt("C4:38:75:1C:7D:A9") == "c4:38:75:1c:7d:a9"
+    assert watcher.validate_bt("12:34:56:78:9A:BC") == "12:34:56:78:9a:bc"
 
 
 def test_parse_keys(watcher):

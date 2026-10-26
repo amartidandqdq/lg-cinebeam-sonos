@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1 - 2026-10-26
+
+### Fixed
+- Short power cycles could be missed by the power-off hysteresis, leaving audio on the projector.
+  Recheck the output after missed probes and reconnect with `luna` only if previously active BT
+  was lost. Preserve manual output changes observed before a network interruption.
+- Probe every 5 seconds after a failed online probe, while keeping the 4-probe power-off threshold.
+- Add regression checks for short power cycles and network blips with BT still active.
+
+### Validation
+- Deployed on the HU710QKE on 2026-10-26: a real power cycle restored `bt_soundbar` on
+  the first `luna` attempt and automatically accepted the connection popup. Audio heard
+  at the speaker still requires user confirmation; sub-threshold cycles are covered by simulation.
+
 ## 0.2.0 - 2026-10-26
 
 Hardening after a technical audit. **Not yet validated on hardware** (test planned on a real

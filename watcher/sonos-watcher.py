@@ -38,6 +38,7 @@ POLL = 10          # s entre deux sondes quand le projecteur est joignable
 SCAN = 15          # s entre deux scans quand il est eteint
 WARMUP = int(os.environ.get("WARMUP", "25"))  # s d'attente apres l'allumage (services webOS)
 OFF_AFTER = 4      # sondes ratees d'affilee avant de conclure "eteint" (coupure LAN != extinction)
+BLIP_POLL = 5      # s entre deux sondes quand une sonde vient d'echouer
 RETRY_DELAYS = (120, 600, 1800)  # s avant chaque reprise apres un echec ; ensuite on abandonne
 
 # ponytail: TLS non verifie, le projecteur presente un certificat auto-signe. Risque accepte sur
@@ -250,6 +251,8 @@ def main():
 
     tracker = PowerTracker()
     adopted = True      # projecteur deja allume au demarrage du service : jamais de touches
+    had_miss = False    # une sonde a rate depuis la derniere lecture de la sortie
+    last_bt = False     # derniere sortie lue = bt_* (permet de reperer un cycle plus court que OFF_AFTER)
     n = 0
     handled = False     # traite pour cet allumage (connecte, choix manuel respecte ou abandon)
     failed_rounds = 0
@@ -262,15 +265,16 @@ def main():
             handled, failed_rounds, next_try = False, 0, 0.0
         elif event == "on":
             log(f"projecteur detecte — warmup {WARMUP} s...")
-            adopted = False
+            adopted, had_miss, last_bt = False, False, False
             time.sleep(WARMUP)
         if not tracker.online:
             time.sleep(SCAN)
             continue
         if tracker.misses:  # sonde ratee mais pas encore "eteint" : coupure breve, on ne touche a rien
-            time.sleep(POLL)
+            had_miss = True
+            time.sleep(BLIP_POLL)
             continue
-        if handled or time.monotonic() < next_try:
+        if not handled and time.monotonic() < next_try:
             time.sleep(POLL)
             continue
 
@@ -294,9 +298,22 @@ def main():
             time.sleep(SCAN)
             continue
 
-        if out.startswith("bt_"):
+        is_bt = out.startswith("bt_")
+        if handled:
+            if had_miss and last_bt and not is_bt:
+                # BT actif avant la coupure, autre sortie au retour : cela peut etre un redemarrage
+                # plus court que OFF_AFTER. On reconnecte par luna seul, sans navigation dans les menus.
+                log("sortie BT perdue apres une coupure — reconnexion (luna seul)")
+                handled, failed_rounds, next_try, adopted = False, 0, 0.0, True
+            else:
+                last_bt, had_miss = is_bt, False
+                close(ws)
+                time.sleep(POLL)
+                continue
+        had_miss = False
+        if is_bt:
             log("sortie audio deja sur la Sonos — rien a faire")
-            handled = True
+            handled, last_bt = True, True
         elif failed_rounds and out != "tv_speaker":
             log(f"sortie changee a la main ({out}) — reprises annulees")
             handled = True
@@ -304,7 +321,7 @@ def main():
             log(f"sortie actuelle {out} -> connexion Sonos...")
             connected, n = connect_round(ws, n, methods_for(failed_rounds, adopted))
             if connected:
-                handled = True
+                handled, last_bt = True, True
             else:
                 failed_rounds += 1
                 delay = retry_delay(failed_rounds)
