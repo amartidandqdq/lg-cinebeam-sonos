@@ -7,6 +7,7 @@ ExecStart=%h/.venvs/sonos-watcher/bin/python %h/sonos-watcher/sonos-watcher.py
 Restart=always
 RestartSec=30
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=%h/sonos-watcher/watcher.env
 
 [Install]
 WantedBy=default.target

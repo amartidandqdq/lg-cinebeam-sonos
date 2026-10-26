@@ -7,36 +7,91 @@ Logique :
   - quand il redevient joignable, attend que les services webOS soient prets
   - lit la sortie audio ; si ce n'est pas bt_*, connexion A2DP via luna (secours : menu)
     (une fois par allumage : un choix manuel ensuite est respecte)
-  - confirme ; note tout dans ~/sonos-watcher.log
-Reversible : systemctl --user stop sonos-watcher (et disable) suffit.
+  - confirme ; note tout dans ~/sonos-watcher/watcher.log
+Garde-fous : une coupure reseau breve n'est pas une extinction (OFF_AFTER sondes ratees
+d'affilee), les reprises apres echec sont bornees et sans menu, et un redemarrage du
+service sur un projecteur deja allume n'envoie jamais de touches a la telecommande.
+Config : variables d'environnement LG_HOST, SONOS_BT (obligatoire), MENU_KEYS, WARMUP
+(voir watcher.env.example). Reversible : systemctl --user disable --now sonos-watcher.
 """
 import io
 import json
+import os
+import pathlib
+import re
 import socket
-import urllib.request
 import ssl
 import sys
 import time
-import pathlib
+import urllib.request
 from datetime import datetime
 
 from PIL import Image
 from websockets.sync.client import connect
 
-HOST = "192.168.1.2"          # IP LAN du projecteur (reserver sur la box)
-FALLBACK_HOSTS = ["m720q-tv", "192.168.1.2"]
+HOST = os.environ.get("LG_HOST", "192.168.1.2")  # IP LAN du projecteur (reserver sur la box)
 PORT = 3001
 CK_FILE = pathlib.Path.home() / "sonos-watcher" / "client-key.txt"
 LOG_FILE = pathlib.Path.home() / "sonos-watcher" / "watcher.log"
 TARGET = "bt_soundbar"  # nom qui reconnecte la Sonos (bt_audio est annule)
-ATTEMPTS = 4      # essais de reconnexion par cycle
 POLL = 10          # s entre deux sondes quand le projecteur est joignable
 SCAN = 15          # s entre deux scans quand il est eteint
-WARMUP = 25        # s d'attente apres l'allumage (services webOS)
+WARMUP = int(os.environ.get("WARMUP", "25"))  # s d'attente apres l'allumage (services webOS)
+OFF_AFTER = 4      # sondes ratees d'affilee avant de conclure "eteint" (coupure LAN != extinction)
+RETRY_DELAYS = (120, 600, 1800)  # s avant chaque reprise apres un echec ; ensuite on abandonne
 
+# ponytail: TLS non verifie, le projecteur presente un certificat auto-signe. Risque accepte sur
+# un LAN domestique ; ne pas exposer le port 3001 hors du reseau local.
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
+
+
+class PowerTracker:
+    """Allume/eteint avec hysteresis : 'off' seulement apres `off_after` sondes ratees d'affilee."""
+
+    def __init__(self, off_after=OFF_AFTER):
+        self.off_after = off_after
+        self.online = True  # on suppose le projecteur allume au demarrage du service
+        self.misses = 0
+
+    def update(self, reachable):
+        if reachable:
+            self.misses = 0
+            if not self.online:
+                self.online = True
+                return "on"
+            return None
+        self.misses += 1
+        if self.online and self.misses >= self.off_after:
+            self.online = False
+            return "off"
+        return None
+
+
+def methods_for(failed_rounds, adopted):
+    """Methodes a essayer. Le menu rejoue des touches visibles a l'ecran : uniquement au 1er tour
+    apres un vrai allumage, jamais en reprise ni sur un projecteur deja allume (`adopted`)."""
+    if failed_rounds == 0 and not adopted:
+        return ["luna", "luna", "menu", "menu"]
+    return ["luna", "luna"]
+
+
+def retry_delay(failed_rounds):
+    """Delai avant la reprise suivante (failed_rounds >= 1), None = abandon jusqu'au prochain allumage."""
+    return RETRY_DELAYS[failed_rounds - 1] if failed_rounds <= len(RETRY_DELAYS) else None
+
+
+def validate_bt(addr):
+    """Adresse BT bien formee et pas le placeholder du depot."""
+    addr = addr.strip().lower()
+    if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", addr) or addr.startswith("aa:bb:cc:"):
+        raise ValueError("SONOS_BT absent ou invalide (attendu aa:bb:cc:dd:ee:ff, voir watcher.env.example)")
+    return addr
+
+
+def parse_keys(text):
+    return [k.strip().upper() for k in text.split(",") if k.strip()] or DEFAULT_MENU_KEYS
 
 
 def log(msg):
@@ -76,8 +131,9 @@ def call(ws, n, uri, payload=None, t=5):
 
 # Settings -> Sound -> Sound Out -> Use Wireless Speaker -> (options) -> 1er appareil enregistre
 # (Living Room SONOS XXXX) -> Connect. Releve a l'ecran le 2026-10-25 sur webOS 24.
-MENU_KEYS = ["DOWN", "ENTER", "RIGHT", "DOWN", "ENTER", "DOWN", "DOWN", "ENTER",
-             "RIGHT", "ENTER", "DOWN", "ENTER", "DOWN", "ENTER"]
+DEFAULT_MENU_KEYS = ["DOWN", "ENTER", "RIGHT", "DOWN", "ENTER", "DOWN", "DOWN", "ENTER",
+                     "RIGHT", "ENTER", "DOWN", "ENTER", "DOWN", "ENTER"]
+MENU_KEYS = parse_keys(os.environ.get("MENU_KEYS", ""))
 
 
 def menu_connect(ws, n):
@@ -92,7 +148,7 @@ def menu_connect(ws, n):
         sp.send("type:button\nname:EXIT\n\n")
 
 
-SONOS_BT = "aa:bb:cc:00:00:a9"  # adresse BT de l'Arc Ultra (= MAC Wi-Fi, verifie 2026-10-25)
+SONOS_BT = os.environ.get("SONOS_BT", "")  # adresse BT de l'Arc Ultra (= MAC Wi-Fi)
 
 
 def luna_connect(ws, n):
@@ -139,31 +195,84 @@ def press(ws, n, key):
         time.sleep(0.5)
 
 
+def close(ws):
+    try:
+        ws.close()
+    except Exception:
+        pass
+
+
+def sound_output(ws, n):
+    return json.loads(call(ws, n, "ssap://audio/getStatus"))["payload"]["volumeStatus"]["soundOutput"]
+
+
+def connect_round(ws, n, methods):
+    """Un tour de reconnexion. Retourne (sortie_bt_active, n)."""
+    # changeSoundOutput ne fait que changer le reglage : apres un boot a froid le lien BT
+    # n'existe pas et le projecteur annule. On ouvre d'abord le lien A2DP via luna
+    # (invisible) ; en secours on rejoue le menu Sound Out -> Connect a la telecommande.
+    for i, how in enumerate(methods, 1):
+        try:
+            (luna_connect if how == "luna" else menu_connect)(ws, n)
+        except Exception as e:
+            log(f"  tentative {i}/{len(methods)} ({how}): echec ({e.__class__.__name__})")
+        n += 100
+        active = False
+        for _ in range(6):
+            time.sleep(2)
+            n += 1
+            try:
+                active = sound_output(ws, n).startswith("bt_")
+            except Exception:
+                continue
+            if active:
+                break
+        # Le projecteur annonce la sortie, pas l'audio reellement entendu : d'ou "sortie BT active".
+        log(f"  tentative {i}/{len(methods)} ({how}): {'SORTIE BT ACTIVE' if active else 'pas de connexion'}")
+        if active:
+            return True, n
+        time.sleep(5)
+    return False, n
+
+
 def main():
+    try:
+        global SONOS_BT
+        SONOS_BT = validate_bt(SONOS_BT)
+    except ValueError as e:
+        log(f"FATAL: {e}")
+        sys.exit(1)
     log(f"=== watcher demarre (cible {TARGET} sur {HOST}) ===")
     if not CK_FILE.exists():
-        log(f"FATAL: {CK_FILE} absent — copier la cle client depuis le PC")
+        log(f"FATAL: {CK_FILE} absent — lancer tools/pair.py")
         sys.exit(1)
     ck = CK_FILE.read_text().strip()
 
-    was_online = True   # on suppose demarrage avec projecteur deja allume
+    tracker = PowerTracker()
+    adopted = True      # projecteur deja allume au demarrage du service : jamais de touches
     n = 0
-    handled = False     # une seule reconnexion par allumage
+    handled = False     # traite pour cet allumage (connecte, choix manuel respecte ou abandon)
+    failed_rounds = 0
+    next_try = 0.0      # monotonic : pas de reprise avant cet instant
 
     while True:
-        # --- attendre l'allumage ---
-        if not reachable():
-            if was_online:
-                log("projecteur eteint — surveillance du reseau...")
-                was_online = False
-            handled = False
+        event = tracker.update(reachable())
+        if event == "off":
+            log("projecteur eteint — surveillance du reseau...")
+            handled, failed_rounds, next_try = False, 0, 0.0
+        elif event == "on":
+            log(f"projecteur detecte — warmup {WARMUP} s...")
+            adopted = False
+            time.sleep(WARMUP)
+        if not tracker.online:
             time.sleep(SCAN)
             continue
-
-        if not was_online:
-            log(f"projecteur detecte — warmup {WARMUP} s...")
-            time.sleep(WARMUP)
-        was_online = True
+        if tracker.misses:  # sonde ratee mais pas encore "eteint" : coupure breve, on ne touche a rien
+            time.sleep(POLL)
+            continue
+        if handled or time.monotonic() < next_try:
+            time.sleep(POLL)
+            continue
 
         # --- tenter une session ---
         try:
@@ -177,71 +286,35 @@ def main():
             continue
 
         n += 1
-        r = call(ws, n, "ssap://audio/getStatus")
         try:
-            out = json.loads(r)["payload"]["volumeStatus"]["soundOutput"]
+            out = sound_output(ws, n)
         except Exception:
             log("lecture etat impossible — reessai plus tard")
-            try:
-                ws.close()
-            except Exception:
-                pass
+            close(ws)
             time.sleep(SCAN)
             continue
 
         if out.startswith("bt_"):
-            if not handled:
-                log("sortie audio deja sur la Sonos — rien a faire")
+            log("sortie audio deja sur la Sonos — rien a faire")
             handled = True
-            try:
-                ws.close()
-            except Exception:
-                pass
-            time.sleep(POLL)
-            continue
-
-        if handled:
-            # deja traite depuis l'allumage : on respecte un choix manuel de sortie
-            try:
-                ws.close()
-            except Exception:
-                pass
-            time.sleep(POLL)
-            continue
-
-        log(f"sortie actuelle {out} -> connexion Sonos...")
-        # changeSoundOutput ne fait que changer le reglage : apres un boot a froid le lien BT
-        # n'existe pas et le projecteur annule. On ouvre d'abord le lien A2DP via luna
-        # (invisible) ; en secours on rejoue le menu Sound Out -> Connect a la telecommande.
-        connected = False
-        for attempt in range(ATTEMPTS):
-            how = "luna" if attempt < 2 else "menu"
-            try:
-                (luna_connect if how == "luna" else menu_connect)(ws, n)
-            except Exception as e:
-                log(f"  tentative {attempt + 1}/{ATTEMPTS} ({how}): echec ({e.__class__.__name__})")
-            n += 100
-            for _ in range(6):
-                time.sleep(2)
-                n += 1
-                try:
-                    cur = json.loads(call(ws, n, "ssap://audio/getStatus"))["payload"]["volumeStatus"]["soundOutput"]
-                except Exception:
-                    continue
-                if cur.startswith("bt_"):
-                    connected = True
-                    break
-            log(f"  tentative {attempt + 1}/{ATTEMPTS} ({how}): {'SONOS CONNECTEE' if connected else 'pas de connexion'}")
+        elif failed_rounds and out != "tv_speaker":
+            log(f"sortie changee a la main ({out}) — reprises annulees")
+            handled = True
+        else:
+            log(f"sortie actuelle {out} -> connexion Sonos...")
+            connected, n = connect_round(ws, n, methods_for(failed_rounds, adopted))
             if connected:
-                break
-            time.sleep(5)
-        handled = True
-        if not connected:
-            log(f"echec apres {ATTEMPTS} tentatives — Sonos eteinte ou hors de portee ? (reessai au prochain allumage)")
-        try:
-            ws.close()
-        except Exception:
-            pass
+                handled = True
+            else:
+                failed_rounds += 1
+                delay = retry_delay(failed_rounds)
+                if delay is None:
+                    log("echec definitif — Sonos eteinte ou hors de portee ? (reessai au prochain allumage)")
+                    handled = True
+                else:
+                    log(f"echec — reprise (luna seul) dans {delay // 60} min")
+                    next_try = time.monotonic() + delay
+        close(ws)
         time.sleep(POLL)
 
 
