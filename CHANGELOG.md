@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — lot 4
+- Validate registration and bound SSAP response waits by absolute deadlines.
+- Require a verified certificate pin or explicit insecure-LAN opt-in.
+- Check screenshot and pointer destinations; reject redirects and bound screenshot bytes/pixels.
+- Keep existing SSAP permissions pending hardware validation.
+
+
 ## Unreleased — lot 3
 - Recognize focused popup with median pixel patches; unreadable capture is UNKNOWN.
 - Disable menu fallback by default; explicitly enabled known profile allows one sequence.

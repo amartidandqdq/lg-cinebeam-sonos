@@ -11,7 +11,7 @@ class FakeWS:
         pass
 
     def recv(self, timeout=None):
-        return "{}"
+        return '{"type":"registered","payload":{"client-key":"key"}}'
 
     def close(self):
         pass
@@ -57,6 +57,8 @@ def sim(watcher, monkeypatch, tmp_path):
     monkeypatch.setattr(watcher, "CK_FILE", ck)
     monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
     monkeypatch.setattr(watcher, "SONOS_BT", "12:34:56:78:9a:bc")
+    monkeypatch.setattr(watcher, "ALLOW_INSECURE_TLS", True)
+    monkeypatch.setattr(watcher, "TLS_FINGERPRINT", "")
     monkeypatch.setattr(watcher, "AUTO_RECOVER_BLIPS", False)
     monkeypatch.setattr(watcher, "MENU_FALLBACK", True)
     monkeypatch.setattr(watcher, "MENU_PROFILE", "hu710qke-webos24")

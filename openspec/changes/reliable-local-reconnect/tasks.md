@@ -7,7 +7,7 @@
 - [x] 3.1 Testable recognition, no blind ENTER, one optional firmware-specific menu fallback.
 
 ## 4. Network and authentication
-- [ ] 4.1 Registration validation, absolute deadlines, TLS policy and bounded destination-checked screenshots.
+- [x] 4.1 Registration validation, absolute deadlines, TLS policy and bounded destination-checked screenshots.
 
 ## 5. Operations
 - [ ] 5.1 Configuration, controls, read-only diagnostic, docs, rollback and supported-Python CI.
