@@ -51,7 +51,7 @@ It runs **once per power-on**. If you switch the output by hand afterwards, the 
 - If BT was active before a missed probe and is lost when the projector returns, reconnect with `luna` only. This also covers power cycles shorter than the power-off threshold; an unchanged output does not trigger a reconnect.
 - **Remote keys are replayed once at most**, on the first round after a real power-on. Never on a retry, and never when the service restarts on a projector that is already on.
 - After a failed round: up to 3 retries (2, 10, 30 min), invisible `luna` only. Then it gives up until the next power-on.
-- Retries stop as soon as the sound output was changed by hand.
+- Retries stop when another output such as HDMI/ARC is observed. Selecting `tv_speaker` by hand is indistinguishable from the projector's default after a failed BT connection, so that choice cannot cancel retries reliably.
 - `SORTIE BT ACTIVE` means the projector *reports* `bt_*`. It cannot prove the audio is heard on the Sonos.
 
 ## Quick start

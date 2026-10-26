@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.2 - 2026-10-26
+
+### Fixed
+- Close an opened WebSocket when registration fails before retrying; repeated authentication
+  timeouts no longer leave those connections open.
+- Clarify that manual `tv_speaker` selection cannot be distinguished from a failed BT connection.
+
+### Tests
+- Cover one, two and three missed probes, repeated short power cycles, cancelling retries
+  after an HDMI/ARC selection, and connection cleanup on registration timeout.
+
 ## 0.2.1 - 2026-10-26
 
 ### Fixed

@@ -279,12 +279,14 @@ def main():
             continue
 
         # --- tenter une session ---
+        ws = None
         try:
             ws = open_ws()
             ws.send(json.dumps({"type": "register", "id": "r", "payload": {"client-key": ck}}))
             time.sleep(1.2)
             ws.recv(timeout=4)
         except Exception as e:
+            close(ws)
             log(f"WS indisponible ({e.__class__.__name__}) — nouvelle tentative dans {SCAN}s")
             time.sleep(SCAN)
             continue

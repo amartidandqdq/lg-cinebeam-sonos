@@ -26,6 +26,9 @@ def sim(watcher, monkeypatch, tmp_path):
         if clock[0] > st["limit"]:
             raise Stop
         item = st["script"].pop(0) if st["script"] else True
+        if isinstance(item, dict):
+            st.update(item)
+            return True
         if item == "manual":  # utilisateur choisit une autre sortie a la main
             st["out"] = "tv_speaker"
             return True
@@ -98,3 +101,44 @@ def test_short_power_cycle_under_the_hysteresis_still_reconnects(sim):
 def test_blip_with_bt_still_active_does_nothing(sim):
     sim["script"] = [True, False, True]
     assert sim["run"]() == ["luna"]
+
+
+@pytest.mark.parametrize("misses", [1, 2, 3])
+def test_subthreshold_cycles_reconnect_without_menu(sim, misses):
+    sim["script"] = [True, "reboot"] + [False] * (misses - 1) + [True]
+    assert sim["run"]() == ["luna", "luna"]
+
+
+def test_repeated_short_cycles_reconnect_once_each(sim):
+    sim["script"] = [True, "reboot", True, "reboot", True]
+    assert sim["run"]() == ["luna", "luna", "luna"]
+
+
+def test_manual_hdmi_during_retry_wait_cancels_retries(sim):
+    sim["connect_works"] = False
+    sim["script"] = [True, {"out": "external_arc"}]
+    assert sim["run"]() == ["luna", "luna"]
+
+
+def test_registration_failure_closes_socket_before_retry(sim, watcher, monkeypatch):
+    class FailedRegistration(FakeWS):
+        closed = 0
+
+        def recv(self, timeout=None):
+            raise TimeoutError
+
+        def close(self):
+            self.closed += 1
+
+    connections = []
+
+    def open_ws():
+        ws = FailedRegistration()
+        connections.append(ws)
+        return ws
+
+    monkeypatch.setattr(watcher, "open_ws", open_ws)
+    sim["limit"] = 30
+    assert sim["run"]() == []
+    assert connections
+    assert all(ws.closed == 1 for ws in connections)
