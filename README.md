@@ -176,3 +176,7 @@ Version history: [CHANGELOG.md](CHANGELOG.md). Licensed under [MIT](LICENSE).
 
 Personal project, not affiliated with LG Electronics or Sonos. It uses the projector's local
 API only; nothing leaves your LAN.
+
+### Connection evidence
+
+`BT_ROUTE_STABLE` means three exact `bt_soundbar` readings over at least ten seconds (`STABILITY_SECONDS`, default 10). Device identity, A2DP link and audible audio remain unverified. A transient route or status timeout is not success. Sonos UPnP media status was observed to report a stopped radio while Bluetooth audio was heard; it is not used as a Bluetooth proof.

@@ -1,7 +1,7 @@
 ## 1. Non-interference
 - [x] 1.1 Observe on startup; classify routes; opt-in ambiguous recovery; regression tests.
 ## 2. Evidence
-- [ ] 2.1 Exact route, bounded stability window and honest result reasons; regression tests.
+- [x] 2.1 Exact route, bounded stability window and honest result reasons; regression tests.
 
 ## 3. Popup and fallback
 - [ ] 3.1 Testable recognition, no blind ENTER, one optional firmware-specific menu fallback.
