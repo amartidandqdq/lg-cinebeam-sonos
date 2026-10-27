@@ -182,3 +182,11 @@ API only; nothing leaves your LAN.
 `BT_ROUTE_STABLE` means three exact `bt_soundbar` readings over at least ten seconds (`STABILITY_SECONDS`, default 10). Device identity, A2DP link and audible audio remain unverified. A transient route or status timeout is not success. Sonos UPnP media status was observed to report a stopped radio while Bluetooth audio was heard; it is not used as a Bluetooth proof.
 
 Popup tests use synthetic layouts. No private screenshots are committed; alternate themes and changed firmware require local capture validation before enabling UI fallback.
+
+### Transport policy (next version)
+
+Supply `TLS_FINGERPRINT` as a SHA256 certificate fingerprint independently checked on your projector. No automatic first-use trust is stored. A changed certificate fails closed before SSAP registration; investigate firmware/reset before updating the pin. To retain the previous trusted-home-LAN compromise explicitly set `ALLOW_INSECURE_TLS=1`. Without a pin or that opt-in startup fails. Never expose these ports outside your LAN.
+
+Screenshot URLs must point to the configured projector, with an allowed HTTP(S) port; redirects, credentials, oversized images and unexpected destinations are rejected. HTTP screenshots require the explicit insecure-LAN opt-in, even with a WSS certificate pin. The screenshot and pointer endpoints must be checked on hardware before adopting strict mode.
+
+Pairing permissions are intentionally unchanged: reducing them without device tests could revoke working functionality. Existing keys are preserved; minimal-permission experiments remain a separate local hardware task.

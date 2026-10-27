@@ -14,6 +14,9 @@ service sur un projecteur deja allume n'envoie jamais de touches a la telecomman
 Config : variables d'environnement LG_HOST, SONOS_BT (obligatoire), MENU_KEYS, WARMUP
 (voir watcher.env.example). Reversible : systemctl --user disable --now sonos-watcher.
 """
+import hashlib
+import hmac
+import http.client
 import io
 import json
 import os
@@ -23,7 +26,7 @@ import socket
 import ssl
 import sys
 import time
-import urllib.request
+import urllib.parse
 from datetime import datetime
 from typing import NamedTuple
 
@@ -56,6 +59,9 @@ def classify_output(output):
 
 # ponytail: TLS non verifie, le projecteur presente un certificat auto-signe. Risque accepte sur
 # un LAN domestique ; ne pas exposer le port 3001 hors du reseau local.
+TLS_FINGERPRINT = os.environ.get("TLS_FINGERPRINT", "").replace(":", "").lower()
+ALLOW_INSECURE_TLS = os.environ.get("ALLOW_INSECURE_TLS", "0") == "1"
+MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
@@ -127,20 +133,85 @@ def reachable():
         s.close()
 
 
+class SessionError(RuntimeError):
+    pass
+
+
+def validate_tls_policy():
+    if TLS_FINGERPRINT and not re.fullmatch(r"[0-9a-f]{64}", TLS_FINGERPRINT):
+        raise ValueError("TLS_FINGERPRINT must contain a SHA256 fingerprint")
+    if not TLS_FINGERPRINT and not ALLOW_INSECURE_TLS:
+        raise ValueError("TLS requires a verified TLS_FINGERPRINT or explicit ALLOW_INSECURE_TLS=1")
+
+
+def verify_certificate(certificate):
+    if TLS_FINGERPRINT and not hmac.compare_digest(hashlib.sha256(certificate).hexdigest(), TLS_FINGERPRINT):
+        raise ValueError("certificate fingerprint mismatch")
+
+
+def secure_connect(url):
+    validate_tls_policy()
+    parsed = urllib.parse.urlsplit(url)
+    if (parsed.scheme != "wss" or parsed.hostname != HOST or parsed.username or parsed.password
+            or parsed.port not in (None, 3001)):
+        raise ValueError("untrusted websocket destination")
+    ws = connect(url, ssl=ctx, origin=None, open_timeout=8, legacy=True)
+    try:
+        if TLS_FINGERPRINT:
+            verify_certificate(ws.socket.getpeercert(binary_form=True))
+    except Exception:
+        close(ws)
+        raise
+    return ws
+
+
 def open_ws():
-    return connect(f"wss://{HOST}:{PORT}/ssap/local", ssl=ctx, origin=None, open_timeout=8)
+    return secure_connect(f"wss://{HOST}:{PORT}/ssap/local")
+
+
+def register(ws, key, timeout=8):
+    ws.send(json.dumps({"type": "register", "id": "r", "payload": {"client-key": key}}))
+    deadline = time.monotonic() + timeout
+    for _ in range(64):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            message = json.loads(ws.recv(timeout=remaining))
+            if not isinstance(message, dict):
+                raise SessionError("registration_invalid")
+            if message.get("type") == "error":
+                raise SessionError("registration_refused")
+            if message.get("type") == "registered":
+                received = message.get("payload", {}).get("client-key")
+                if not isinstance(received, str) or not received or received != key:
+                    raise SessionError("registration_invalid")
+                return
+        except (TypeError, ValueError, TimeoutError, OSError) as exc:
+            raise SessionError("registration_invalid_or_timeout") from exc
+    raise SessionError("registration_timeout")
 
 
 def call(ws, n, uri, payload=None, t=5):
+    deadline = time.monotonic() + t
     try:
-        ws.send(json.dumps({"type": "request", "id": f"w{n}", "uri": uri,
-                            "payload": payload or {}}))
-        while True:  # ignore les reponses en retard d'appels precedents
-            r = ws.recv(timeout=t)
-            if json.loads(r).get("id") == f"w{n}":
-                return r
-    except Exception:
-        return None
+        ws.send(json.dumps({"type": "request", "id": f"w{n}", "uri": uri, "payload": payload or {}}))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SessionError("status_timeout")
+            response = ws.recv(timeout=remaining)
+            message = json.loads(response)
+            if not isinstance(message, dict):
+                raise SessionError("invalid_payload")
+            if message.get("id") == f"w{n}":
+                if message.get("type") == "error":
+                    raise SessionError("request_refused")
+                return response
+    except SessionError:
+        raise
+    except Exception as exc:
+        raise SessionError("request_invalid_or_disconnected") from exc
 
 
 # Settings -> Sound -> Sound Out -> Use Wireless Speaker -> (options) -> 1er appareil enregistre
@@ -154,7 +225,7 @@ def menu_connect(ws, n):
     call(ws, n, "ssap://system.launcher/launch", {"id": "com.palm.app.settings"})
     time.sleep(7)  # 1er lancement apres boot lent : 3 s ne suffisaient pas
     path = json.loads(call(ws, n + 1, "ssap://com.webos.service.networkinput/getPointerInputSocket"))["payload"]["socketPath"]
-    with connect(path, ssl=ctx, origin=None, open_timeout=8) as sp:
+    with secure_connect(path) as sp:
         for key in MENU_KEYS:
             sp.send(f"type:button\nname:{key}\n\n")
             time.sleep(1.2)
@@ -196,9 +267,41 @@ POPUP = {(640, 428): (125, 132, 140), (735, 428): (125, 132, 140),   # bouton No
          (205, 440): (202, 203, 205), (760, 360): (203, 204, 206)}   # fond du popup
 
 
+def validate_screenshot_url(uri):
+    parsed = urllib.parse.urlsplit(uri)
+    if (parsed.scheme not in ("http", "https") or parsed.hostname != HOST
+            or parsed.username or parsed.password or parsed.fragment
+            or parsed.port not in (None, 80, 443, 3000, 3001)):
+        raise ValueError("untrusted screenshot destination")
+    if parsed.scheme == "http" and not ALLOW_INSECURE_TLS:
+        raise ValueError("HTTP screenshot requires explicit insecure LAN mode")
+    return parsed
+
+
 def screenshot_bytes(uri):
-    with urllib.request.urlopen(uri, context=ctx, timeout=10) as response:
-        return response.read()
+    validate_tls_policy()
+    parsed = validate_screenshot_url(uri)
+    https = parsed.scheme == "https"
+    factory = http.client.HTTPSConnection if https else http.client.HTTPConnection
+    kwargs = {"context": ctx} if https else {}
+    connection = factory(parsed.hostname, parsed.port, timeout=8, **kwargs)
+    try:
+        connection.connect()
+        if https and TLS_FINGERPRINT:
+            verify_certificate(connection.sock.getpeercert(binary_form=True))
+        connection.request("GET", urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, "")))
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ValueError("screenshot HTTP status or redirect rejected")
+        length = response.getheader("Content-Length")
+        if length and int(length) > MAX_SCREENSHOT_BYTES:
+            raise ValueError("screenshot too large")
+        content = response.read(MAX_SCREENSHOT_BYTES + 1)
+        if len(content) > MAX_SCREENSHOT_BYTES:
+            raise ValueError("screenshot too large")
+        return content
+    finally:
+        connection.close()
 
 
 def popup_match(image):
@@ -215,7 +318,11 @@ def popup_state(ws, n):
     try:
         uri = json.loads(call(ws, n, "ssap://tv/executeOneShot"))["payload"]["imageUri"]
         with Image.open(io.BytesIO(screenshot_bytes(uri))) as image:
+            if image.width * image.height > 8_500_000:
+                raise ValueError("screenshot dimensions too large")
             return "YES_FOCUSED" if popup_match(image) else "ABSENT"
+    except SessionError:
+        raise
     except Exception:
         return "UNKNOWN"
 
@@ -226,7 +333,7 @@ def popup_visible(ws, n):
 
 def press(ws, n, key):
     path = json.loads(call(ws, n, "ssap://com.webos.service.networkinput/getPointerInputSocket"))["payload"]["socketPath"]
-    with connect(path, ssl=ctx, origin=None, open_timeout=8) as sp:
+    with secure_connect(path) as sp:
         sp.send(f"type:button\nname:{key}\n\n")
         time.sleep(0.5)
 
@@ -302,6 +409,7 @@ def main():
     try:
         global SONOS_BT
         SONOS_BT = validate_bt(SONOS_BT)
+        validate_tls_policy()
     except ValueError as e:
         log(f"FATAL: {e}")
         sys.exit(1)
@@ -344,9 +452,7 @@ def main():
         ws = None
         try:
             ws = open_ws()
-            ws.send(json.dumps({"type": "register", "id": "r", "payload": {"client-key": ck}}))
-            time.sleep(1.2)
-            ws.recv(timeout=4)
+            register(ws, ck)
         except Exception as e:
             close(ws)
             log(f"WS indisponible ({e.__class__.__name__}) — nouvelle tentative dans {SCAN}s")
