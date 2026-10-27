@@ -79,8 +79,8 @@ def test_screenshot_rejects_redirect_and_oversize(watcher, monkeypatch):
             pass
     monkeypatch.setattr(watcher.http.client, 'HTTPConnection', Connection)
     with pytest.raises(ValueError):
-        watcher.screenshot_bytes('http://192.168.1.2:3000/a')
+        watcher._download_screenshot('http://192.168.1.2:3000/a')
     Response.status = 200
     Response.getheader = lambda self, name: str(watcher.MAX_SCREENSHOT_BYTES + 1)
     with pytest.raises(ValueError):
-        watcher.screenshot_bytes('http://192.168.1.2:3000/a')
+        watcher._download_screenshot('http://192.168.1.2:3000/a')

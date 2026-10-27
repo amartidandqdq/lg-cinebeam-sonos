@@ -4,9 +4,13 @@ After=network-online.target
 
 [Service]
 ExecStart=%h/.venvs/sonos-watcher/bin/python %h/sonos-watcher/sonos-watcher.py
-Restart=always
+Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=30
 Environment=PYTHONUNBUFFERED=1
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
 EnvironmentFile=%h/sonos-watcher/watcher.env
 
 [Install]

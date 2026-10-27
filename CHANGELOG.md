@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0-rc.1 — not deployed
+- Accept completed Content-Length screenshots when HTTP/1.0 or Connection: close has
+  closed the socket; cover length, EOF and chunked loopback responses.
+- Final boundary regressions: recheck pause after the last route read; bound DNS/TCP/TLS
+  together with screenshot I/O using a killable, reaped local worker.
+- Independent review: recheck output before popup confirmation, enforce a total screenshot
+  deadline and record terminal evidence consistently after failed attempts.
+- Add a loopback TLS/websocket integration test using the pinned production dependency.
+- Add explicit pause/resume/reconnect controls and read-only JSON diagnostics.
+- Validate configuration and private key permissions; rotate local logs.
+- Install code/unit with backups while preserving existing key and config.
+- Reuse TLS policy for pairing; preserve existing key on refusal.
+- Add Python 3.11–3.13 CI, operational rollback and hardware-validation record.
+- Hardware-only release gates remain open; no candidate deployment is claimed.
+
+
 ## Unreleased — lot 4
 - Validate registration and bound SSAP response waits by absolute deadlines.
 - Require a verified certificate pin or explicit insecure-LAN opt-in.

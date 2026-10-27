@@ -1,192 +1,145 @@
-# LG CineBeam Q → Sonos Arc Ultra, reconnected automatically
+# LG CineBeam → Sonos Bluetooth recovery
 
-[![gitleaks](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/gitleaks.yml)
-![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot)
-![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
-![webOS](https://img.shields.io/badge/webOS-24-A50034)
-[![ci](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/ci.yml/badge.svg)](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/ci.yml)
-![License](https://img.shields.io/badge/license-MIT-green)
+[![CI](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/ci.yml/badge.svg)](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/ci.yml)
+[![Gitleaks](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/amartidandqdq/lg-cinebeam-sonos/actions/workflows/gitleaks.yml)
+![Python 3.11–3.13](https://img.shields.io/badge/Python-3.11–3.13-blue)
+![MIT](https://img.shields.io/badge/license-MIT-green)
 
-Turn the projector on. About 40 seconds later, the sound plays on the Sonos.
-No root, no developer mode, no remote in hand, no "Yes" to click.
+A small local Python service reconnects a paired Sonos after the projector returns from a detected off/on cycle. No root on the projector, cloud service, Docker, MQTT or Home Assistant is required.
 
-> **The problem.** The LG CineBeam Q (HU710QKE, webOS 24) forgets its Bluetooth soundbar on every
-> cold boot. Getting it back takes six clicks in the menus plus a confirmation popup, every time.
->
-> **The fix.** A ~250-line Python watcher on any always-on Linux box on the LAN. It notices the
-> projector powering on and reconnects the Sonos through the projector's own local API (SSAP).
+**Compatibility measured historically:** LG HU710QKE / webOS 24 and Sonos Arc Ultra. The deployed v0.2.2 completed one recorded power-cycle test with automatic popup acceptance and human-confirmed Sonos audio on 2026-10-26. **The 0.3.0 release candidate changes below have not been deployed or hardware-validated.** See [validation records](docs/validation.md).
 
-## How it works
+## Behavior
 
-```mermaid
-flowchart LR
-    A[Projector powers on] --> B[Port 3001 answers<br/>wait 25 s]
-    B --> C{Output already<br/>bt_*?}
-    C -- yes --> Z[Nothing to do]
-    C -- no --> D[luna a2dp/connect<br/>via createAlert trick]
-    D --> E[Screenshot:<br/>Yes/No popup?]
-    E -- seen --> F[Press ENTER]
-    F --> G[changeSoundOutput<br/>bt_soundbar]
-    E -- not seen --> G
-    G --> H{Sound on Sonos?}
-    H -- yes --> Z
-    H -- "no (after 2 tries)" --> I[Fallback: replay<br/>remote keys in Settings]
-    I --> H
-```
+1. Observe at service startup. Starting/restarting the service on an already-running projector changes no audio settings.
+2. Require four failed probes before an off/on transition. This is a network heuristic, not proof of electrical power state.
+3. Wait the configured warmup. Only the default `tv_speaker` output is eligible for automatic recovery; other outputs are preserved from the first reading.
+4. Request A2DP via the existing Luna alert-close technique. Confirm the popup only if the known focused-Yes visual signature matches. No blind ENTER.
+5. Require three exact `bt_soundbar` readings spanning at least ten seconds. Report `BT_ROUTE_STABLE`; device identity, A2DP link and audible sound remain unverified.
+6. Retry failed rounds after 2, 10 and 30 minutes, Luna only; then stop until the next detected cycle. Recheck the output before each method.
 
-| Step | What happens | SSAP call |
-|------|--------------|-----------|
-| Detect | TCP probe on the projector every 15 s | none |
-| Check | Read the current sound output | `ssap://audio/getStatus` |
-| Connect | Open the A2DP link to the Sonos | `luna://com.webos.service.bluetooth2/a2dp/connect` |
-| Accept | Find the "wants to connect" popup on a screenshot, press ENTER | `ssap://tv/executeOneShot` + pointer input socket |
-| Route | Send the audio to the soundbar | `ssap://com.webos.service.apiadapter/audio/changeSoundOutput` |
-| Fallback | Settings → Sound → Sound Out → Wireless Speaker → Sonos → Connect | `system.launcher/launch` + remote keys |
+The Luna technique comes from [lgtv-control-mcp](https://github.com/brunofgmag/lgtv-control-mcp): closing an alert triggers its internal `luna://com.webos.service.bluetooth2/a2dp/connect` URI. That protocol is preserved.
 
-It observes an already-running projector at service startup. Automatic reconnect is permitted after the configured off/on detection; TCP reachability is a heuristic, not proof of electrical power state.
+### Choices and ambiguity
 
-### Safety rules
+- Short interruptions are observation-only by default. `AUTO_RECOVER_BLIPS=1` opts into Luna-only recovery when the target route was present before interruption and the default speaker route appears afterwards. This is useful for Bluetooth-only installations but can override a manual speaker choice made during the outage.
+- `tv_speaker` selected manually is indistinguishable from the default after a failed BT connection. Use `--pause` before a deliberate speaker session.
+- Another `bt_*` output is not treated as proof of Sonos identity and is not taken over.
+- Menu fallback is off by default. `MENU_FALLBACK=1` plus `MENU_PROFILE=hu710qke-webos24` allows **one** sequence on the first round after a detected cycle. Never on startup or retry. Firmware/theme changes require local visual validation.
+- Popup recognition uses median color patches, not semantic text recognition. Synthetic tests prove algorithm behavior; they do not prove recognition on arbitrary themes or firmware.
 
-- A **short LAN drop is not a power-off**: the projector is declared off only after 4 failed probes in a row.
-- Ambiguous short interruptions are observation-only by default. `AUTO_RECOVER_BLIPS=1` permits Luna-only recovery if the exact target route was active before the interruption and the default speaker route is observed afterwards. This opt-in may override a manual speaker selection made during the interruption.
-- Menu navigation is disabled by default. Set `MENU_FALLBACK=1` and `MENU_PROFILE=hu710qke-webos24` only on the measured firmware. At most one menu sequence is permitted after a detected off/on cycle, never on retry or service startup. Popup ENTER requires a matching focused Yes signature; this is a firmware-specific visual heuristic, not semantic recognition.
-- After a failed round: up to 3 retries (2, 10, 30 min), invisible `luna` only. Then it gives up until the next power-on.
-- Retries stop when another output such as HDMI/ARC is observed. Selecting `tv_speaker` by hand is indistinguishable from the projector's default after a failed BT connection, so that choice cannot cancel retries reliably.
-- Only the exact `bt_soundbar` route is the target; another BT route is preserved. Route selection does not establish device identity or audible audio.
+## Install
 
-## Quick start
-
-**You need:** the projector and a Linux box on the same LAN, Python 3.11+, and the Sonos already
-paired once over Bluetooth from the projector menu.
-
-1. **Install**
-
-   ```sh
-   git clone https://github.com/amartidandqdq/lg-cinebeam-sonos && cd lg-cinebeam-sonos
-   python3 -m venv ~/.venvs/sonos-watcher
-   ~/.venvs/sonos-watcher/bin/pip install -r requirements.txt
-   mkdir -p ~/sonos-watcher && cp watcher/sonos-watcher.py ~/sonos-watcher/
-   ```
-
-2. **Pair with the projector (once).** With the projector on, run the command below and accept the
-   prompt on screen within 60 s. The key lands in `~/sonos-watcher/client-key.txt`.
-
-   ```sh
-   ~/.venvs/sonos-watcher/bin/python tools/pair.py 192.168.1.2
-   ```
-
-3. **Configure.** Create `~/sonos-watcher/watcher.env` from `watcher/watcher.env.example`:
-
-   | Variable | Set it to | Default |
-   |----------|-----------|---------|
-   | `LG_HOST` | Projector LAN IP (reserve it in your router) | `192.168.1.2` |
-   | `SONOS_BT` | Sonos Bluetooth address (same as its Wi-Fi MAC on the Arc Ultra). **Required**: the service refuses to start without it | none |
-   | `MENU_KEYS` | Comma-separated key path of the fallback, if your menu differs | webOS 24 path |
-   | `WARMUP` | Seconds to wait after power-on | `25` |
-
-   `TARGET` (`bt_soundbar`) and the retry timings are constants at the top of the script.
-
-4. **Run as a user service**
-
-   ```sh
-   mkdir -p ~/.config/systemd/user
-   cp watcher/sonos-watcher.service ~/.config/systemd/user/
-   systemctl --user daemon-reload
-   systemctl --user enable --now sonos-watcher
-   loginctl enable-linger "$USER"   # keep it running after logout
-   ```
-
-5. **Check.** Power-cycle the projector, then:
-
-   ```sh
-   tail -f ~/sonos-watcher/watcher.log
-   ```
-
-   ```text
-   projecteur detecte — warmup 25 s...
-   sortie actuelle tv_speaker -> connexion Sonos...
-     popup de connexion detecte -> Yes
-     tentative 1/2 (luna): SORTIE BT ACTIVE
-   ```
-
-   Log lines are in French. Uninstall with `systemctl --user disable --now sonos-watcher`.
-
-## The luna trick
-
-SSAP clients cannot call `luna://` services directly. webOS will, however, run the URI attached to a
-system alert's `onclose` when that alert is closed. So the watcher:
-
-1. creates an alert whose `onclose`, `onfail` and button all point to the luna call;
-2. closes it straight away with `closeAlert`.
-
-The call runs blind (no response comes back), so the watcher checks the result through
-`audio/getStatus`. Credit for the technique:
-[brunofgmag/lgtv-control-mcp](https://github.com/brunofgmag/lgtv-control-mcp).
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| Output says `bt_soundbar` but sound stays on the projector | The Yes/No popup was not accepted | Check the `POPUP` pixel signature against a fresh capture (`tools/popup.py`) |
-| `echec definitif` | Sonos off, asleep or out of range | Wake the Sonos; it retries at the next power-on |
-| Fallback opens the wrong menu | Menu order differs, or the Sonos is not the first registered device | Adjust `MENU_KEYS` in `watcher.env` while watching `tools/nav.py` screenshots |
-| `WS indisponible` in a loop | Wrong `HOST` or a revoked `client-key` | Fix the IP, pair again |
-| Sound drops when you start Sonos radio | Sonos leaves BT for the new source | Expected; the watcher only acts once per power-on |
-
-## Repository layout
-
-| Path | Contents |
-|------|----------|
-| `watcher/` | The service and its systemd unit |
-| `tools/` | `pair.py` (one-time pairing), plus debug helpers: `nav.py` (keys and screenshots), `luna.py` (raw luna call), `a2dp.py` (connect test), `popup.py` (popup detection), `sonosctl.py` (Sonos UPnP state) |
-| `tests/` | `pytest` suite: power-off hysteresis, bounded retries, a simulated `main()` loop, `/etc/hosts` rollback |
-| `scripts/`, `PLAN.md`, `trouvailles.md` | The original debloat plan (separate, experimental, reversible with `restore-root.sh`) and the full investigation log (French; §10–12 cover the reconnect) |
-| `legacy/` | Superseded experiments. Do not use |
-| `backup/` | Read-only snapshot of the projector's app inventory |
-
-## Limitations
-
-- Tested on one setup: HU710QKE, webOS 24, Sonos Arc Ultra.
-- A firmware update may move the popup or reorder the menus. Both are one constant to update.
-- The `client-key` grants control of the projector. It is git-ignored (and written `0600`); keep it that
-  way. MACs and Sonos IDs in this repo are placeholders.
-- TLS certificate checks are off: the projector presents a self-signed certificate. Keep port 3001 on
-  your LAN only.
-- The pairing manifest asks for broad SSAP permissions (copied from the key that is known to work).
-  Narrowing them is untested.
-
-## Development
+Use a Linux host on the same trusted LAN, Python 3.11–3.13 and a Sonos already paired to the projector through its Bluetooth menu.
 
 ```sh
-pip install -r requirements.txt -r requirements-dev.txt
-ruff check . && python -m pytest -q
+git clone https://github.com/amartidandqdq/lg-cinebeam-sonos
+cd lg-cinebeam-sonos
+# Until merged: check out the reviewed release-candidate branch explicitly.
+# git switch feat/diagnostics-and-operations
+python3 -m venv ~/.venvs/sonos-watcher
+~/.venvs/sonos-watcher/bin/pip install -r requirements.txt
+python3 tools/install.py
 ```
 
-Version history: [CHANGELOG.md](CHANGELOG.md). Licensed under [MIT](LICENSE).
+The installer copies code and the systemd unit, backs up replaced code/unit files to `~/sonos-watcher/backup-*`, creates a private config template only if missing, and **never starts the service**. Existing configuration and client keys are preserved. Installation is tested in a temporary home directory.
 
-## Thanks
+Edit `~/sonos-watcher/watcher.env` before pairing or starting. Set the real address and a TLS policy; the template intentionally cannot run unchanged.
 
-- [brunofgmag/lgtv-control-mcp](https://github.com/brunofgmag/lgtv-control-mcp) for the `createAlert`
-  → `luna://` technique. Without it, this would still be a remote-key macro.
-- The webOS homebrew and SSAP community, whose reverse-engineering notes made the local API usable.
-- [websockets](https://github.com/python-websockets/websockets) and
-  [Pillow](https://github.com/python-pillow/Pillow), the only two dependencies.
+| Variable | Default | Meaning |
+|---|---|---|
+| `LG_HOST` | `192.168.1.2` | Projector IPv4 address or hostname, no URL/port |
+| `SONOS_BT` | required | Real paired Sonos BT address; placeholders rejected |
+| `TLS_FINGERPRINT` | unset | Independently verified SHA256 certificate pin |
+| `ALLOW_INSECURE_TLS` | `0` | Explicit trusted-LAN exception if no verified pin; also required for HTTP screenshots |
+| `WARMUP` | `25` | 0–300 seconds after detected off/on |
+| `STABILITY_SECONDS` | `10` | 10–60 seconds spanning three exact-route readings |
+| `AUTO_RECOVER_BLIPS` | `0` | Opt-in aggressive ambiguous-outage recovery |
+| `MENU_FALLBACK` | `0` | Opt-in visible UI fallback |
+| `MENU_PROFILE` | unset | Must be `hu710qke-webos24` when menu fallback enabled |
+| `MENU_KEYS` | measured layout | Comma-separated UP/DOWN/LEFT/RIGHT/ENTER/EXIT/BACK/HOME |
 
-## Disclaimer
+Use `0` or `1` for boolean options. Invalid configuration exits with status 2; systemd does not restart that error in a loop.
 
-Personal project, not affiliated with LG Electronics or Sonos. It uses the projector's local
-API only; nothing leaves your LAN.
+### Pair and start
 
-### Connection evidence
+Load the private environment for interactive commands; systemd loads the same file automatically.
 
-`BT_ROUTE_STABLE` means three exact `bt_soundbar` readings over at least ten seconds (`STABILITY_SECONDS`, default 10). Device identity, A2DP link and audible audio remain unverified. A transient route or status timeout is not success. Sonos UPnP media status was observed to report a stopped radio while Bluetooth audio was heard; it is not used as a Bluetooth proof.
+```sh
+chmod 600 ~/sonos-watcher/watcher.env
+set -a
+. ~/sonos-watcher/watcher.env
+set +a
+~/.venvs/sonos-watcher/bin/python ~/sonos-watcher/pair.py "$LG_HOST"
+# Accept the pairing prompt only if a new key is being created.
+chmod 600 ~/sonos-watcher/client-key.txt
+~/.venvs/sonos-watcher/bin/python ~/sonos-watcher/sonos-watcher.py --diagnose
+systemctl --user daemon-reload
+systemctl --user enable --now sonos-watcher
+loginctl enable-linger "$USER"
+```
 
-Popup tests use synthetic layouts. No private screenshots are committed; alternate themes and changed firmware require local capture validation before enabling UI fallback.
+Existing keys are reused and never overwritten on refusal. Pairing uses the same TLS policy. Permissions retain the historically working manifest: their minimal subset has not been validated on hardware. A separate experimental key can use `pair.py HOST NEW_KEY --permissions-file permissions.json`; do not replace the working key or claim a reduced manifest is verified without testing all required operations.
 
-### Transport policy (next version)
+## Operate and diagnose
 
-Supply `TLS_FINGERPRINT` as a SHA256 certificate fingerprint independently checked on your projector. No automatic first-use trust is stored. A changed certificate fails closed before SSAP registration; investigate firmware/reset before updating the pin. To retain the previous trusted-home-LAN compromise explicitly set `ALLOW_INSECURE_TLS=1`. Without a pin or that opt-in startup fails. Never expose these ports outside your LAN.
+After loading `watcher.env` as above:
 
-Screenshot URLs must point to the configured projector, with an allowed HTTP(S) port; redirects, credentials, oversized images and unexpected destinations are rejected. HTTP screenshots require the explicit insecure-LAN opt-in, even with a WSS certificate pin. The screenshot and pointer endpoints must be checked on hardware before adopting strict mode.
+```sh
+PY=~/.venvs/sonos-watcher/bin/python
+WATCHER=~/sonos-watcher/sonos-watcher.py
+"$PY" "$WATCHER" --diagnose       # read-only JSON; no audio mutations or key disclosure
+"$PY" "$WATCHER" --pause          # persistent local pause flag
+"$PY" "$WATCHER" --resume         # remove pause; does not force a reconnect
+# For an explicit reconnect: pause and stop the daemon first, avoiding two active controllers.
+"$PY" "$WATCHER" --pause
+systemctl --user stop sonos-watcher
+"$PY" "$WATCHER" --resume
+"$PY" "$WATCHER" --reconnect-now  # Luna only, preserves other audio outputs
+systemctl --user start sonos-watcher
+journalctl --user -u sonos-watcher --since today
+```
 
-Pairing permissions are intentionally unchanged: reducing them without device tests could revoke working functionality. Existing keys are preserved; minimal-permission experiments remain a separate local hardware task.
+Diagnostics establish TCP reachability, authenticated SSAP, output route and last logged attempt. `BT_ROUTE_SELECTED` is a single setting read; `BT_ROUTE_STABLE` is three readings. Neither means `BT_LINK_CONFIRMED` or `AUDIO_VERIFIED`. A human confirmed audio on the deployed old version, not permanently for every future connection. Sonos UPnP media state was seen reporting a stopped radio while Bluetooth sound was heard; it is not used as independent BT proof.
+
+Log lines include attempt/method/evidence/reason. The local log rotates at roughly 1 MB with three backups; journald retention is controlled by the host. No screenshots are saved by the watcher. Legacy debug tools may capture content: use them locally and never publish private captures.
+
+| Symptom | Action |
+|---|---|
+| No reconnect immediately after service startup | Expected observation mode; use an explicit reconnect or the next detected off/on cycle |
+| Stable route but no sound | Check the real speaker/popup; route stability cannot prove audible audio |
+| Registration refused | Preserve the key; diagnose the projector pairing before explicitly creating a separate new key |
+| Screenshot UNKNOWN | Check local endpoint, size, TLS policy and firmware appearance; no blind ENTER is sent |
+| Certificate mismatch | Stop and independently check the certificate/firmware before updating the pin |
+| Sonos unavailable | Bounded retries; check availability, then use the explicit reconnect procedure |
+
+## Transport and secrets
+
+Choose a locally verified SHA256 pin or explicitly accept `ALLOW_INSECURE_TLS=1` on a trusted home LAN. There is no silent TOFU acceptance. Verify a certificate through an independent trusted local channel before pinning it; merely querying an untrusted network endpoint is not proof of identity. A mismatch fails before SSAP registration. Strict pin mode has **not** been checked on the projector; screenshot and WSS services may use different certificates.
+
+Screenshot destinations must match `LG_HOST`, use HTTP(S), no credentials/fragment, and allowed ports 80/443/3000/3001. Redirects, excessive encoded size (4 MB) and image dimensions (>8.5 MP) are rejected. A short-lived local Python worker is killed and reaped at the eight-second timeout, covering DNS, TCP, TLS, headers and body together (plus OS cleanup overhead). It receives only screenshot endpoint/policy options, never the SSAP key. HTTP screenshots require explicit insecure mode. Pointer sockets require WSS on the configured host/port. Do not expose the projector ports to the internet. Keys/config must remain private; runtime key permissions are checked on Linux.
+
+## Upgrade, rollback and uninstall
+
+See [operations](docs/operations.md) for exact commands. Do not deploy a candidate merely because CI is green. The historical rollback target is `v0.2.2` / `daf39f76b5349f65b98a5a288ff06ae35b2eac59`; keep your private env/key and use the matching old service unit and dependencies. Never restore an example Bluetooth address over live configuration.
+
+## Development and release
+
+```sh
+python -m pip install -r requirements.txt -r requirements-dev.txt
+ruff check .
+python -m pytest -q
+openspec validate reliable-local-reconnect --strict
+```
+
+CI runs on Python 3.11, 3.12 and 3.13. Tests simulate projector/clock and exercise transport, non-interference, stability, popup focus, pairing refusal, installer preservation and isolated `/etc/hosts` rollback. No test drives physical equipment. The 30-cycle and 48-hour targets are still pending for the candidate, not inferred from fake time.
+
+`VERSION` identifies the candidate. Cut a stable tag only after review, merge and the accepted hardware campaign. The active OpenSpec change remains open until those validation tasks are complete.
+
+| Path | Purpose |
+|---|---|
+| `watcher/`, `tools/pair.py`, `tools/install.py` | Supported recovery service, pairing and installer |
+| `tests/`, `openspec/`, `docs/` | Automated checks, behavioral contract and operations/validation records |
+| `scripts/`, `PLAN.md`, `trouvailles.md`, `legacy/` | Separate historical debloat experiments; not required for recovery |
+
+**Debloat is experimental and outside the stable watcher.** `restore-root.sh` has an isolated hosts-file regression test; its full on-projector restoration is not hardware-validated. Do not run it as part of installation. MIT licensed.
