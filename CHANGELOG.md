@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- Docs: the early root-level cleanup scripts (the project's abandoned first goal) moved to `legacy/`
+  and no longer described as a feature; markers renamed (`lg-cleanup`). They were never applied.
+
 ## 0.3.0-rc.1 — not deployed
 - Accept completed Content-Length screenshots when HTTP/1.0 or Connection: close has
   closed the socket; cover length, EOF and chunked loopback responses.
@@ -84,7 +88,7 @@ power cycle); 0.1.0 is the version proven on the HU710QKE.
   `MENU_KEYS`, `WARMUP`. The service refuses to start with a missing or placeholder `SONOS_BT`.
 
 ### Fixed
-- `scripts/restore-root.sh` now really reverts the `/etc/hosts` changes of `debloat.sh`
+- The `/etc/hosts` rollback of the early root cleanup script now really reverts its changes
   (it only contained no-op placeholders).
 
 ### Removed

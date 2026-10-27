@@ -1,4 +1,8 @@
-# Débloat LG CineBeam Q (HU710QKE) — plan inspiré de cleanyourtv
+# Nettoyage initial LG CineBeam Q (HU710QKE) — plan inspiré de cleanyourtv
+
+> **Objectif abandonné.** Ce plan visait à retirer pub, reco et télémétrie. Le root n'étant pas
+> disponible sur ce firmware, le projet est devenu la reconnexion automatique de la Sonos (voir
+> `README.md`). Document conservé comme historique ; les scripts du niveau 3 sont dans `legacy/`.
 
 Objectif : enlever la couche pub / reco / télémétrie et l'accueil LG chargé, tout
 en gardant une restauration en une ligne. Méthode cleanyourtv reprise telle
@@ -48,8 +52,8 @@ publicité personnalisée, Informations de visionnage, ACR, tuiles promo retiré
    clignoter l'accueil LG selon firmware.
 
 ### Niveau 3 — root (si un exploit sort pour `HE_PJT_W24…`)
-`scripts/debloat.sh` (services `admanager`, `acr2`, `contentminer`, `nudge`,
-`sportsalarm`, `adoverlay-service` + hosts marqués), `scripts/restore-root.sh`
+`legacy/cleanup-root.sh` (services `admanager`, `acr2`, `contentminer`, `nudge`,
+`sportsalarm`, `adoverlay-service` + hosts marqués), `legacy/restore-root.sh`
 pour tout annuler. Rien n'est supprimé : stub monté en RAM + journal
 `undo.log`.
 
@@ -63,14 +67,14 @@ On garde aussi : liste des apps installées, `/etc/hosts` d'origine, contenu de
 `/proc/mounts`.
 
 ## Vérification
-`scripts/verify.sh` avant / après. Critère de réussite : `ps` sans
+`legacy/verify.sh` avant / après. Critère de réussite : `ps` sans
 `admanager|contentminer|nudge`, hosts marqués présents, accueil sans rangée
 pub, et projecteur toujours utilisable (HDMI, AirPlay, Screen Share, apps).
 
 ## Restauration
 Niveau 0 : désactiver la règle DNS. Niveau 1 : récocher. Niveau 2 :
 suppression de l'app dev (ou `ares-uninstall`). Niveau 3 :
-`sh scripts/restore-root.sh`, puis reboot.
+`sh legacy/restore-root.sh`, puis reboot.
 
 ## À ne pas casser sur un projecteur
 | Service | Pourquoi on le garde |

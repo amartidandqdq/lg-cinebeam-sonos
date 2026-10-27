@@ -144,7 +144,7 @@ la tentative échoue et le projecteur retombe sur `tv_speaker`.
 Le CineBeam Q a un port HDMI avec **eARC** ; les Sonos Ray/Beam G2/Arc/Arc Ultra l'ont
 aussi. Un câble HDMI entre les deux supprime totalement le problème de reconnexion
 (connexion permanente, pas de latence, meilleure qualité). Le Bluetooth reste utile si
-le câblage gêne ; notre débloat n'interfère pas avec l'un ni l'autre.
+le câblage gêne ; notre nettoyage n'interfère pas avec l'un ni l'autre.
 
 ### Conclusion du test (2026-10-25, avec Sonos en source BT)
 - `changeSoundOutput` met a jour le reglage persiste mais **ne declenche pas la connexion

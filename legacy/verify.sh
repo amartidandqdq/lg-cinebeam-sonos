@@ -9,7 +9,7 @@ luna-send -n 1 -w 3000 -f luna://com.webos.applicationManager/getForegroundAppIn
 echo '== services pub/telemetrie actifs'
 ps 2>/dev/null | grep -iE 'acr2|admanager|nudge|contentminer|sportsalarm|adoverlay|remotelogger|service-logger' | grep -v grep
 echo '== stubs montes (0 = rien)'
-grep -c 'debloat/stub-noop' /proc/mounts 2>/dev/null
+grep -c 'cleanup/stub-noop' /proc/mounts 2>/dev/null
 echo '== hosts : lignes marquees'
-grep -c 'lg-debloat' /etc/hosts 2>/dev/null
+grep -c 'lg-cleanup' /etc/hosts 2>/dev/null
 echo '===== FIN ====='

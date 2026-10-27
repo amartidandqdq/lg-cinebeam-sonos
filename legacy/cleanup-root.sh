@@ -1,9 +1,9 @@
 #!/bin/sh
-# 03 - DEBLOAT (necessite root + SSH). Chaque action est journalisee dans
-# /media/developer/debloat/undo.log pour que restore-root.sh puisse tout annuler.
+# 03 - CLEANUP (necessite root + SSH). Chaque action est journalisee dans
+# /media/developer/cleanup/undo.log pour que restore-root.sh puisse tout annuler.
 # Principe cleanyourtv : rien n'est supprime, tout est en RAM ou marque.
 export PATH=/usr/bin:/usr/sbin:/bin:/sbin:$PATH
-D=/media/developer/debloat
+D=/media/developer/cleanup
 mkdir -p "$D" 2>/dev/null
 LOG="$D/undo.log"
 log() { echo "$*" | tee -a "$LOG"; }
@@ -28,17 +28,17 @@ for b in acr2 admanager sportsalarm adoverlay-service; do
 done
 
 echo "Journal : $LOG"
-# 3. domaines pub -> 127.0.0.1 : marques "# lg-debloat" (retires par restore)
+# 3. domaines pub -> 127.0.0.1 : marques "# lg-cleanup" (retires par restore)
 HOSTS='eic.ads.lgtvcommon.com nl.ad.lgsmartad.com nl.info.lgsmartad.com'
-if grep -q "# lg-debloat" /etc/hosts 2>/dev/null; then
+if grep -q "# lg-cleanup" /etc/hosts 2>/dev/null; then
   echo "hosts: deja bloque"
 else
-  if [ -w /etc/hosts ] && printf '127.0.0.1 %s # lg-debloat\n::1 %s # lg-debloat\n' "$HOSTS" "$HOSTS" >> /etc/hosts 2>/dev/null; then
+  if [ -w /etc/hosts ] && printf '127.0.0.1 %s # lg-cleanup\n::1 %s # lg-cleanup\n' "$HOSTS" "$HOSTS" >> /etc/hosts 2>/dev/null; then
     log "hosts:ecrit"
   else
-    cp /etc/hosts /tmp/hosts.lgdebloat
-    printf '127.0.0.1 %s # lg-debloat\n'  "$HOSTS" >> /tmp/hosts.lgdebloat
-    mount --bind /tmp/hosts.lgdebloat /etc/hosts && touch /tmp/hosts.lgdebloat.mounted
+    cp /etc/hosts /tmp/hosts.lgcleanup
+    printf '127.0.0.1 %s # lg-cleanup\n'  "$HOSTS" >> /tmp/hosts.lgcleanup
+    mount --bind /tmp/hosts.lgcleanup /etc/hosts && touch /tmp/hosts.lgcleanup.mounted
     log "hosts:ram"
   fi
 fi
