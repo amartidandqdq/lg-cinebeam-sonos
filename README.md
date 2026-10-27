@@ -140,6 +140,6 @@ CI runs on Python 3.11, 3.12 and 3.13. Tests simulate projector/clock and exerci
 |---|---|
 | `watcher/`, `tools/pair.py`, `tools/install.py` | Supported recovery service, pairing and installer |
 | `tests/`, `openspec/`, `docs/` | Automated checks, behavioral contract and operations/validation records |
-| `scripts/`, `PLAN.md`, `trouvailles.md`, `legacy/` | Project history: the initial goal (cleaning ads and telemetry off the projector, which needs root) was dropped, and the project became the Sonos reconnect. Not required for recovery |
+| `scripts/`, `trouvailles.md`, `legacy/` | Investigation log (French), SSAP probing helpers and superseded experiments. Not required for recovery |
 
-**The early root-level cleanup scripts in `legacy/` are abandoned and outside the supported watcher.** Root is not available on this firmware, so they were never applied to the projector. `legacy/restore-root.sh` keeps an isolated hosts-file regression test; nothing there is hardware-validated. Do not run them. MIT licensed.
+`legacy/` is kept for the investigation log only: do not use it. MIT licensed.

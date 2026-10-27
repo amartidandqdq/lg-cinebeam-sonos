@@ -11,7 +11,7 @@ import os
 import pathlib
 import time
 
-# Same manifest as scripts/backup.py: the key it produced runs everything the watcher needs.
+# Broad manifest, copied from the key known to work with the watcher. Narrowing it is untested.
 PERMISSIONS = [
     "LAUNCH", "LAUNCH_WEBAPP", "APP_TO_APP", "CLOSE", "TEST_OPEN", "TEST_PROTECTED", "CONTROL_AUDIO",
     "CONTROL_DISPLAY", "CONTROL_INPUT_JOYSTICK", "CONTROL_INPUT_MEDIA_RECORDING",

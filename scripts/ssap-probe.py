@@ -84,7 +84,6 @@ def main():
         ("com.webos.service.system/getSystemInfo", {}),
         ("com.webos.applicationManager/listApps", {}),
         ("com.webos.settingsservice/getSystemSettings", {"category": "general"}),
-        ("com.webos.service.ads/getAdState", {}),
     ]
     for i, (uri, payload) in enumerate(cmds, 1):
         ws_send(s, {

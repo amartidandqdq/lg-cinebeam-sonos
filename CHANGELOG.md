@@ -1,8 +1,8 @@
 # Changelog
 
 ## Unreleased
-- Docs: the early root-level cleanup scripts (the project's abandoned first goal) moved to `legacy/`
-  and no longer described as a feature; markers renamed (`lg-cleanup`). They were never applied.
+- Refocus the repository on the Sonos reconnect: removed the unrelated projector-cleanup plan, scripts,
+  blocklist and app inventory.
 
 ## 0.3.0-rc.1 — not deployed
 - Accept completed Content-Length screenshots when HTTP/1.0 or Connection: close has
@@ -86,10 +86,6 @@ power cycle); 0.1.0 is the version proven on the HU710QKE.
   the audio actually heard.
 - Configuration moved to environment variables (`watcher.env`): `LG_HOST`, `SONOS_BT`,
   `MENU_KEYS`, `WARMUP`. The service refuses to start with a missing or placeholder `SONOS_BT`.
-
-### Fixed
-- The `/etc/hosts` rollback of the early root cleanup script now really reverts its changes
-  (it only contained no-op placeholders).
 
 ### Removed
 - Unused `FALLBACK_HOSTS`.

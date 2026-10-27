@@ -1,6 +1,6 @@
 # Trouvailles — LG CineBeam Q (HU710QKE), webOS 24
 
-> Dernière mise à jour : 2026-10-25. Méthode inspirée de cleanyourtv (backup → désactivation réversible → vérification), adaptée à webOS.
+> Journal d'investigation de la reconnexion automatique du CineBeam à la Sonos. Dernière mise à jour : 2026-10-25.
 
 ## 1. Ce que nous avons établi
 
@@ -8,98 +8,10 @@
 |---|---|
 | Modèle | LG CineBeam Q — HU710QKE (2024, webOS 24) |
 | Réseau | `192.168.1.2` — ports SSAP 3000 (HTTP) et 3001 (WSS) |
-| Root | **Impossible** : RootMyTV corrigé par LG depuis mi-2022 ; les exploits caniroot s'arrêtent aux projecteurs 2021 (`HE_PJT_W21Z`) |
 | API | SSAP WebSocket ; ce firmware accepte `type: "request"` (pas `call`), origin vide, clé de certificat auto-signée (SSL sans vérification) |
-| Appairage | Fait le 2026-10-25 ; clé cliente dans `backup/client-key.txt` (à NE PAS partager) |
-| Sauvegarde | `backup/inventaire-*.json` : 99 apps listées, apps au premier plan, launch points de l'accueil |
+| Appairage | Fait le 2026-10-25 (`tools/pair.py`) ; la clé cliente est un secret, à ne jamais partager |
 
-## 2. Usage déclaré (notre feuille de route)
-
-- **Utilisé** : Jellyfin en DLNA (le projecteur est un *renderer* via l'app `Media Player`) et **AirPlay**.
-- **Non utilisé** : LG Channels / Live TV, **assistants vocaux** (Alexa, Google).
-- **À retirer de l'accueil** : CANAL+, TF1+, M6+, ARTE, Orange TV, france.tv, Pathé Home.
-
-### À garder impérativement
-| App / service | Pourquoi |
-|---|---|
-| `com.webos.app.mediadiscovery` (Media Player) | le renderer DLNA du projecteur |
-| `airplay` | AirPlay 2 (iPhone / Mac / iPad) |
-| `com.webos.app.hdmi1-4`, `inputcommon` | les entrées HDMI |
-| `com.webos.app.miracast` | Screen Share (au cas où) |
-| `com.webos.app.home` / `homeconnect` | l'accueil LG (on le garde, on l'épure) |
-| `com.webos.app.screensaver` | écran de veille |
-| mise à jour firmware | laisser les correctifs passer |
-
-### À supprimer de l'accueil (apps « utilisateur »)
-`CANAL+`, `TF1+`, `M6+`, `ARTE`, `Orange TV`, `france.tv`, `Pathé Home` — soit depuis l'UI
-(maintien sur la tuile → retirer), soit en désinstallation via le mode développeur
-(`ares-install --remove`), voir §4.
-
-> Sauvegarde de l'inventaire confirme : ces 7 apps ont `systemApp: false` + `CPApp: true`
-> (apps du store, désinstallables proprement). La pub/ACR/Live TV ont `systemApp: true`
-> (non désinstallables sans root : on les coupe par réglages + DNS).
-
-### À neutraliser (bloat / pub / télémétrie)
-| Cible | Ce que c'est | Comment |
-|---|---|---|
-| `com.webos.app.adapp` | app « Advertisement » | invisible sans root : coupée via réglages + DNS |
-| `com.webos.app.shoppinghdmi1-4` + `shoppingoverlay` | les overlays de pub shopping sur les entrées HDMI | disparaissent avec l'ACR / les promos désactivées |
-| `com.webos.app.acr*` (LivePlus) | reconnaissance de contenu (télémétrie) | réglage « Informations de visionnage » + DNS |
-| `com.webos.app.exampleapp.*` | apps de démo LG oubliées | inertes, sans tuile ; aucun risque |
-| `amazon.alexapr`, `google.assistant` | assistants non utilisés | se désactivent depuis leurs réglages / à masquer |
-| `com.webos.app.livetv`, `livemenu`, `livepick`… | stack TV live | masquage des tuiles ; LG Channels désactivable |
-
-## 3. Blocage DNS via Pi-hole (niveau 0, zéro risque)
-
-Liste prête à importer : `scripts/pihole-blocklist.txt` (une domaine par ligne).
-Procédure :
-1. Pi-hole → Group Management → **Groups** → créer un groupe `lg-projecteur`.
-2. Adressage statique du projecteur sur ta box (réservation DHCP) puis, dans Pi-hole,
-   ajouter l'IP du projecteur au groupe.
-3. Domainlist → ajouter les domaines du fichier avec le groupe `lg-projecteur` ciblé.
-4. Vérification : `nslookup eic.ads.lgtvcommon.com 192.168.1.x` (IP du Pi-hole) → doit répondre `0.0.0.0`.
-
-⚠️ Certains firmwares LG codent en dur un DNS de secours (8.8.8.8). Si des requêtes passent
-malgré le Pi-hole, il faut une règle de redirection DNS (NAT hairpin DNS) sur la box —
-on regarde ça seulement si les pubs passent encore.
-
-**Ne pas bloquer en entier** : `lgtvcommon.com` et `lge.com` portent aussi des services
-légitimes (mises à jour, TinyM wrapper). On ne vise que les sous-domaines pub/pub/reco.
-
-## 4. Réglages sur le projecteur (checklist ciblée)
-
-Voir `scripts/settings-checklist.md` — résumé pour nous :
-- Accueil : désactiver **Promotion de l'écran d'accueil** et **Recommandation de contenu**.
-- Confidentialité : **Informations de visionnage** OFF (= coupe l'ACR/LivePlus),
-  **Publicité personnalisée** OFF, **Recommandations basées sur les centres d'intérêt** OFF.
-- Retirer les tuiles FR inutilisées de l'accueil (maintien tuile → retirer).
-- LG Channels : désactiver si présent.
-- Ne pas toucher : mise à jour auto, ThinQ, réseau.
-
-## 5. Réversibilité (notre contrat « rien de briqué »)
-
-| Action | Annulation |
-|---|---|
-| Blocage Pi-hole | retirer le domaine du groupe |
-| Retrait d'une tuile de l'accueil | tu peux la remettre depuis « Apps » |
-| Désactivation réglages | recocher dans les menus |
-| Désinstallation d'une app user (dev mode) | réinstallation via LG Content Store |
-| `client-key` révoquée | refaire un appairage (popup) |
-
-Aucune manipulation ne touche la partition système ; sans root, rien n'est désinstallé
-de force, et le pire cas reste « l'app revient après une mise à jour LG ».
-
-## 6. Prochaines étapes
-
-1. **Toi** : checklist réglages (§4) + import Pi-hole (§3).
-2. **Moi** : script de vérification avant/après (`scripts/verify.sh` adapté en Python SSAP,
-   car pas de shell root ici).
-3. Optionnel : activer le **mode développeur** pour `ares-install --remove` des apps FR
-   proprement (l'UI suffit souvent, le dev mode permet en plus un audit complet).
-4. Watch-out : à chaque mise à jour LG, on relit l'inventaire (script `backup.py` relançable
-   à volonté, lecture seule).
-
-## 7. Son — Sonos en Bluetooth (reconnexion auto)
+## 2. Son — Sonos en Bluetooth (reconnexion auto)
 
 **Diagnostic (SSAP, 2026-10-25)** : la sortie audio persistante du projecteur est
 `tv_speaker`. Quand la connexion Bluetooth échoue à l'allumage, le CineBeam retombe sur
@@ -157,7 +69,7 @@ le câblage gêne ; notre nettoyage n'interfère pas avec l'un ni l'autre.
 - Piste non exploree : lancement direct de la page reglages via
   `ssap://com.webos.applicationManager/launch` (deep-link) pour reduire le rituel.
 
-## 9. Session de debugging SSAP (2026-10-25 soir) — trouvailles decisives
+## 3. Session de debugging SSAP (2026-10-25 soir) — trouvailles decisives
 
 ### Les services reellement exposes (ssap://api/getServiceList)
 ```
@@ -210,7 +122,7 @@ La reconnexion BT est **possible par API** et reussit en ~4 s **quand la barre S
 en source Bluetooth**. Sinon le projecteur annule apres 10 s. Le watcher m720q retente
 4 fois par cycle, cible `bt_audio`, et journalise chaque tentative.
 
-## 10. Solution retenue : reconnexion auto par rejeu du menu (2026-10-25 23:19, validee)
+## 4. Solution retenue : reconnexion auto par rejeu du menu (2026-10-25 23:19, validee)
 
 - Sonos = **Arc Ultra** `192.168.1.139` (nom BT : `Living Room (SONOS XXXX)`). Pas de cable HDMI
   vers le projecteur (`HDMI_1 connected:false`), donc pas d'eARC.
@@ -229,22 +141,22 @@ en source Bluetooth**. Sinon le projecteur annule apres 10 s. Le watcher m720q r
 - Limite : la sequence depend de l'ordre des menus et de la Sonos en 1re position des
   appareils enregistres. Apres une mise a jour webOS ou un nouvel appareil BT, revalider.
 
-## 11. Meilleure methode : connexion A2DP directe via luna (2026-10-25 23:32, validee)
+## 5. Meilleure methode : connexion A2DP directe via luna (2026-10-25 23:32, validee)
 
 Trouvee en lisant `brunofgmag/lgtv-control-mcp` (`lunaRequest`) : une alerte creee par
 `ssap://system.notifications/createAlert` dont le `onclose` pointe vers un `luna://...`, puis
 fermee par `closeAlert`, execute l'appel luna. **Fonctionne sur ce webOS 24** (toast de test
-affiche). L'echec note au §9 venait de la variante « clic sur le bouton ».
+affiche). L'echec note au §3 venait de la variante « clic sur le bouton ».
 
 - Appel : `luna://com.webos.service.bluetooth2/a2dp/connect {"address": "aa:bb:cc:00:00:a9"}`
   (adresse BT de l'Arc Ultra = sa MAC Wi-Fi), puis 6 s apres `changeSoundOutput bt_soundbar`.
 - Temoin apres extinction + Wake-on-LAN : adresse fausse `...:a8` → reste `tv_speaker` ;
   bonne adresse `...:a9` → `bt_soundbar` stable.
-- Watcher : 2 essais luna, puis 2 essais menu (§10) en secours si LG ferme l'astuce.
+- Watcher : 2 essais luna, puis 2 essais menu (§4) en secours si LG ferme l'astuce.
   Test reel : connectee 9 s apres le warmup, sans aucun menu a l'ecran.
 - Extinction/allumage a distance : `ssap://system/turnOff` + Wake-on-LAN sur `aa:bb:cc:00:00:01`.
 
-## 12. Popup de confirmation "wants to connect" (2026-10-25 23:49, valide)
+## 6. Popup de confirmation "wants to connect" (2026-10-25 23:49, valide)
 
 - Apres `a2dp/connect` (luna), la Sonos repond par une demande que le projecteur affiche :
   « [Living Room (SONOS XXXX)] wants to connect to your Projector... » **Yes / No** (focus sur Yes).
