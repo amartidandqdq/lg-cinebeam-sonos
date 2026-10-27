@@ -27,7 +27,7 @@ import urllib.request
 from datetime import datetime
 from typing import NamedTuple
 
-from PIL import Image
+from PIL import Image, ImageStat
 from websockets.sync.client import connect
 
 HOST = os.environ.get("LG_HOST", "192.168.1.2")  # IP LAN du projecteur (reserver sur la box)
@@ -42,6 +42,8 @@ OFF_AFTER = 4      # sondes ratees d'affilee avant de conclure "eteint" (coupure
 BLIP_POLL = 5      # s entre deux sondes quand une sonde vient d'echouer
 RETRY_DELAYS = (120, 600, 1800)  # s avant chaque reprise apres un echec ; ensuite on abandonne
 STABILITY_SECONDS = float(os.environ.get("STABILITY_SECONDS", "10"))
+MENU_FALLBACK = os.environ.get("MENU_FALLBACK", "0") == "1"
+MENU_PROFILE = os.environ.get("MENU_PROFILE", "")
 AUTO_RECOVER_BLIPS = os.environ.get("AUTO_RECOVER_BLIPS", "0") == "1"
 
 
@@ -84,8 +86,8 @@ class PowerTracker:
 def methods_for(failed_rounds, adopted):
     """Methodes a essayer. Le menu rejoue des touches visibles a l'ecran : uniquement au 1er tour
     apres un vrai allumage, jamais en reprise ni sur un projecteur deja allume (`adopted`)."""
-    if failed_rounds == 0 and not adopted:
-        return ["luna", "luna", "menu", "menu"]
+    if failed_rounds == 0 and not adopted and MENU_FALLBACK and MENU_PROFILE == "hu710qke-webos24":
+        return ["luna", "luna", "menu"]
     return ["luna", "luna"]
 
 
@@ -176,12 +178,16 @@ def luna_connect(ws, n):
     # Sans validation le son reste sur le projecteur : on detecte le popup et on appuie sur OK.
     for k in range(8):
         time.sleep(2)
-        if popup_visible(ws, n + 10 + k):
+        state = popup_state(ws, n + 10 + k)
+        if state == "UNKNOWN":
+            log("method=luna reason=screenshot_unavailable")
+        if state == "YES_FOCUSED":
             log("  popup de connexion detecte -> Yes")
             press(ws, n + 30, "ENTER")
             time.sleep(3)
             break
-    call(ws, n + 2, "ssap://com.webos.service.apiadapter/audio/changeSoundOutput", {"output": TARGET})
+    if classify_output(sound_output(ws, n + 3)) in ("TARGET", "DEFAULT_FALLBACK"):
+        call(ws, n + 2, "ssap://com.webos.service.apiadapter/audio/changeSoundOutput", {"output": TARGET})
 
 
 # (x, y) -> couleur attendue sur une capture 960x540 du popup "<Sonos> wants to connect"
@@ -190,14 +196,32 @@ POPUP = {(640, 428): (125, 132, 140), (735, 428): (125, 132, 140),   # bouton No
          (205, 440): (202, 203, 205), (760, 360): (203, 204, 206)}   # fond du popup
 
 
-def popup_visible(ws, n):
+def screenshot_bytes(uri):
+    with urllib.request.urlopen(uri, context=ctx, timeout=10) as response:
+        return response.read()
+
+
+def popup_match(image):
+    image = image.convert("RGB").resize((960, 540))
+    # Median patches reject isolated matching pixels; this remains a firmware-specific heuristic.
+    for (x, y), color in POPUP.items():
+        median = ImageStat.Stat(image.crop((x - 2, y - 2, x + 3, y + 3))).median
+        if max(abs(a - b) for a, b in zip(median, color)) > 15:
+            return False
+    return True
+
+
+def popup_state(ws, n):
     try:
         uri = json.loads(call(ws, n, "ssap://tv/executeOneShot"))["payload"]["imageUri"]
-        im = Image.open(io.BytesIO(urllib.request.urlopen(uri, context=ctx, timeout=10).read())).convert("RGB")
-        im = im.resize((960, 540))
-        return all(max(abs(a - b) for a, b in zip(im.getpixel(p), c)) <= 15 for p, c in POPUP.items())
+        with Image.open(io.BytesIO(screenshot_bytes(uri))) as image:
+            return "YES_FOCUSED" if popup_match(image) else "ABSENT"
     except Exception:
-        return False
+        return "UNKNOWN"
+
+
+def popup_visible(ws, n):
+    return popup_state(ws, n) == "YES_FOCUSED"
 
 
 def press(ws, n, key):

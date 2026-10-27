@@ -49,7 +49,7 @@ It observes an already-running projector at service startup. Automatic reconnect
 
 - A **short LAN drop is not a power-off**: the projector is declared off only after 4 failed probes in a row.
 - Ambiguous short interruptions are observation-only by default. `AUTO_RECOVER_BLIPS=1` permits Luna-only recovery if the exact target route was active before the interruption and the default speaker route is observed afterwards. This opt-in may override a manual speaker selection made during the interruption.
-- **Remote keys are replayed once at most**, on the first round after a real power-on. Never on a retry, and never when the service restarts on a projector that is already on.
+- Menu navigation is disabled by default. Set `MENU_FALLBACK=1` and `MENU_PROFILE=hu710qke-webos24` only on the measured firmware. At most one menu sequence is permitted after a detected off/on cycle, never on retry or service startup. Popup ENTER requires a matching focused Yes signature; this is a firmware-specific visual heuristic, not semantic recognition.
 - After a failed round: up to 3 retries (2, 10, 30 min), invisible `luna` only. Then it gives up until the next power-on.
 - Retries stop when another output such as HDMI/ARC is observed. Selecting `tv_speaker` by hand is indistinguishable from the projector's default after a failed BT connection, so that choice cannot cancel retries reliably.
 - Only the exact `bt_soundbar` route is the target; another BT route is preserved. Route selection does not establish device identity or audible audio.
@@ -180,3 +180,5 @@ API only; nothing leaves your LAN.
 ### Connection evidence
 
 `BT_ROUTE_STABLE` means three exact `bt_soundbar` readings over at least ten seconds (`STABILITY_SECONDS`, default 10). Device identity, A2DP link and audible audio remain unverified. A transient route or status timeout is not success. Sonos UPnP media status was observed to report a stopped radio while Bluetooth audio was heard; it is not used as a Bluetooth proof.
+
+Popup tests use synthetic layouts. No private screenshots are committed; alternate themes and changed firmware require local capture validation before enabling UI fallback.

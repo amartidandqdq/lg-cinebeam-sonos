@@ -23,8 +23,10 @@ def test_failures_must_be_consecutive(watcher):
     assert t.online
 
 
-def test_first_round_after_power_on_may_replay_menu(watcher):
-    assert watcher.methods_for(failed_rounds=0, adopted=False) == ["luna", "luna", "menu", "menu"]
+def test_first_round_after_power_on_may_replay_menu(watcher, monkeypatch):
+    monkeypatch.setattr(watcher, "MENU_FALLBACK", True)
+    monkeypatch.setattr(watcher, "MENU_PROFILE", "hu710qke-webos24")
+    assert watcher.methods_for(failed_rounds=0, adopted=False) == ["luna", "luna", "menu"]
 
 
 def test_menu_never_used_on_retries_or_adopted_session(watcher):
