@@ -7,7 +7,7 @@
 
 A small local Python service reconnects a paired Sonos after the projector returns from a detected off/on cycle. No root on the projector, cloud service, Docker, MQTT or Home Assistant is required.
 
-**Compatibility measured historically:** LG HU710QKE / webOS 24 and Sonos Arc Ultra. The deployed v0.2.2 completed one recorded power-cycle test with automatic popup acceptance and human-confirmed Sonos audio on 2026-10-26. **The 0.3.0 release candidate changes below have not been deployed or hardware-validated.** See [validation records](docs/validation.md).
+**Compatibility measured historically:** LG HU710QKE / webOS 24 and Sonos Arc Ultra. The deployed v0.2.2 completed one recorded power-cycle test with automatic popup acceptance and human-confirmed Sonos audio on 2026-10-26. **The 0.3.0 release candidate was deployed as a candidate on 2026-10-28 (first observed automatic recovery, validation campaign in progress); no stable release is claimed.** See [validation records](docs/validation.md).
 
 ## Behavior
 
