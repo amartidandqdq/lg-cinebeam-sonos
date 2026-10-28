@@ -71,6 +71,17 @@ policy.
 The 48-hour endurance window opened at 2026-10-28 21:48:44 CET from service start
 (PID 4143521); final PID, restart count, RSS and log sizes are to be recorded at closure.
 
+#### Five-cycle campaign — 2026-10-28 22:13–22:23 CET
+
+Five consecutive off/on cycles were driven remotely (SSAP `system/turnOff` plus
+Wake-on-LAN) at roughly two-minute cadence, with a shortened dwell: each cycle waited for
+the watcher's own `projecteur eteint` registration, so every outage was a full registered
+transition, then woke the projector after 8 s. Result: **5/5 consecutive recoveries**,
+each ending `BT_ROUTE_STABLE` on the first Luna attempt with the popup auto-accepted.
+The user interrupted the campaign after five cycles, so the 30/30 goal remains open; no
+per-cycle acoustic confirmation was recorded during the rapid cadence. Raw per-cycle
+records: [data/2026-10-28-cycle-campaign.jsonl](data/2026-10-28-cycle-campaign.jsonl).
+
 The same evening, the reference host woke the projector over Wake-on-LAN at 22:06:45 CET
 and the installed 0.3.0-rc.1 service managed the complete cycle unattended: warmup,
 `tv_speaker` read at 22:07:11, popup accepted at 22:07:17, `BT_ROUTE_STABLE` at 22:07:33
@@ -81,7 +92,7 @@ remain unverified by design, per the no-claim reporting.
 | Scenario | Automated evidence | Candidate hardware status |
 |---|---|---|
 | Startup observation on tv_speaker / ARC / other BT | Simulated, zero mutation | Observed once on BT target, identity unverified; tv_speaker/ARC startups pending |
-| Detected off/on, default route | Simulated reconnect allowed | 2 observed recoveries (2026-10-28); acoustic confirmation on the service-managed recovery; campaign pending |
+| Detected off/on, default route | Simulated reconnect allowed | 5/5 consecutive (2026-10-28, rapid cadence); acoustic confirmation only on the 22:07 recovery; 30/30 goal open |
 | 1–3 failed probes and repeated short cycles | Conservative default and explicit recovery opt-in simulated | Pending |
 | Sonos unavailable and later returns | Bounded retries simulated | Pending |
 | Output changed during retry | ARC guard simulated; manual tv_speaker ambiguity documented | Pending |

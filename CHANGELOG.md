@@ -3,8 +3,8 @@
 ## Unreleased
 - Refocus the repository on the Sonos reconnect: removed the unrelated projector-cleanup plan, scripts,
   blocklist and app inventory.
-- Deployed candidate 0.3.0-rc.1 on the reference host (2026-10-28): two observed automatic
-  recoveries, the service-managed one with acoustic confirmation, and an opened 48-hour
+- Deployed candidate 0.3.0-rc.1 on the reference host (2026-10-28): one acoustic-confirmed
+  automatic recovery, a 5/5 consecutive rapid-cycle campaign, and an opened 48-hour
   endurance window; the stable release remains gated on the hardware campaign.
 
 ## 0.3.0-rc.1 — not deployed
