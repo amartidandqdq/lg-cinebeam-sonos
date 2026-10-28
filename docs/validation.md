@@ -71,10 +71,17 @@ policy.
 The 48-hour endurance window opened at 2026-10-28 21:48:44 CET from service start
 (PID 4143521); final PID, restart count, RSS and log sizes are to be recorded at closure.
 
+The same evening, the reference host woke the projector over Wake-on-LAN at 22:06:45 CET
+and the installed 0.3.0-rc.1 service managed the complete cycle unattended: warmup,
+`tv_speaker` read at 22:07:11, popup accepted at 22:07:17, `BT_ROUTE_STABLE` at 22:07:33
+on the first Luna attempt. The user confirmed audible sound from the Sonos shortly
+afterwards — the candidate's first human acoustic confirmation. BT identity and A2DP link
+remain unverified by design, per the no-claim reporting.
+
 | Scenario | Automated evidence | Candidate hardware status |
 |---|---|---|
 | Startup observation on tv_speaker / ARC / other BT | Simulated, zero mutation | Observed once on BT target, identity unverified; tv_speaker/ARC startups pending |
-| Detected off/on, default route | Simulated reconnect allowed | 1 observed recovery (2026-10-28, no acoustic confirmation); campaign pending |
+| Detected off/on, default route | Simulated reconnect allowed | 2 observed recoveries (2026-10-28); acoustic confirmation on the service-managed recovery; campaign pending |
 | 1–3 failed probes and repeated short cycles | Conservative default and explicit recovery opt-in simulated | Pending |
 | Sonos unavailable and later returns | Bounded retries simulated | Pending |
 | Output changed during retry | ARC guard simulated; manual tv_speaker ambiguity documented | Pending |
