@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Stabilize the loopback TLS integration test: the test server now negotiates TLS 1.2, avoiding an
+  intermittent websockets handshake timeout in CI while still exercising real certificate pinning.
 - Refocus the repository on the Sonos reconnect: removed the unrelated projector-cleanup plan, scripts,
   blocklist and app inventory.
 - Add free public-repo tooling: CodeRabbit and Greptile repository configs, native CodeQL

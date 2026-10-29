@@ -21,6 +21,11 @@ def test_real_tls_websocket_pin_before_auth(watcher, monkeypatch, tmp_path):
                    check=True, capture_output=True)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
+    # websockets' sync server may read the first HTTP request into OpenSSL's
+    # buffer while completing a TLS 1.3 handshake, then wait forever on the raw
+    # socket. TLS 1.2 keeps this loopback test deterministic; fingerprint
+    # verification itself is independent of the negotiated TLS version.
+    context.maximum_version = ssl.TLSVersion.TLSv1_2
     received = []
     def handler(ws):
         try:
