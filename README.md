@@ -134,6 +134,19 @@ openspec validate reliable-local-reconnect --strict
 
 CI runs on Python 3.11, 3.12 and 3.13. Tests simulate projector/clock and exercise transport, non-interference, stability, popup focus, pairing refusal, installer preservation and isolated `/etc/hosts` rollback. No test drives physical equipment. The 30-cycle and 48-hour targets are still pending for the candidate, not inferred from fake time.
 
+### Automated review and analysis
+
+Free public-repo tooling ships preconfigured:
+
+- **Native, zero signup:** [CodeQL](.github/workflows/codeql.yml) (static security analysis)
+  and [OpenSSF Scorecard](.github/workflows/scorecard.yml) (supply-chain score) run on
+  GitHub Actions; [Dependabot](.github/dependabot.yml) updates `pip` and action pins weekly.
+- **One-click web apps:** [CodeRabbit](https://github.com/apps/coderabbitai) and
+  [Greptile](https://github.com/apps/greptile) are free for public repositories. The
+  repository already carries tuned review behavior in `.coderabbit.yaml` and
+  `greptile.json` (connection lifecycle, bounded deadlines, secret handling, evidence
+  honesty); authorize each app on this repository and reviews start with those rules.
+
 `VERSION` identifies the candidate. Cut a stable tag only after review, merge and the accepted hardware campaign. The active OpenSpec change remains open until those validation tasks are complete.
 
 | Path | Purpose |

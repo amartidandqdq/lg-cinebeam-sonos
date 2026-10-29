@@ -1,0 +1,41 @@
+language: "en-US"
+reviews:
+  profile: "chill"
+  auto_approvals:
+    enabled: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "watcher/**"
+      instructions: |
+        - This service talks WSS/SSAP to an LG projector and drives a Sonos Bluetooth
+          reconnect. Socket and WebSocket lifecycle matters: every connection opened for
+          registration, chat, screenshots or pairing must be closed on refusal, payload
+          errors, authentication timeouts and exceptions.
+        - All network I/O must stay bounded by absolute deadlines (registration waits,
+          screenshot fetch, Luna attempts); flag any unbounded read/write/recv, and any
+          subprocess worker that is not killed and reaped.
+        - Screenshot handling: the destination must match LG_HOST, redirects rejected,
+          encoded-size and pixel caps enforced; never add paths that expose private data.
+        - Secrets: the LG client key and watcher.env must never be logged, printed,
+          embedded in reports or transmitted anywhere.
+        - Evidence honesty is a release requirement: do not claim device identity, A2DP
+          link or audible audio beyond BT_ROUTE_STABLE, and keep hardware-only gates open
+          unless the docs already record measured facts.
+    - path: "tests/**"
+      instructions: |
+        - Behavior changes must come with coverage; tests must stay deterministic and
+          offline (loopback TLS/mocks only, never real devices).
+        - For SSAP/TLS fixtures, check HTTP/1.0 close semantics, chunked fallback, EOF
+          mid-body and that timeouts/deadlines are actually asserted.
+    - path: "docs/**"
+      instructions: |
+        - No fabricated hardware validation; claims must stay within recorded and hashed
+          facts (see docs/validation.md).
+        - Keep environment tables consistent with watcher defaults and status codes.
+chat:
+  auto_reply: true

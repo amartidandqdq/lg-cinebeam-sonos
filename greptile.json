@@ -1,0 +1,10 @@
+{
+  "strictness": 3,
+  "commentTypes": ["logic", "syntax"],
+  "triggerOnDrafts": false,
+  "excludeAuthors": ["github-actions", "dependabot[bot]"],
+  "ignorePatterns": "greptile.json\n.coderabbit.yaml\nlegacy/**\n**/__pycache__/**\n**/_bak*/**\nCHANGELOG.md",
+  "instructions": "Hardware-facing Python service connecting to an LG CineBeam projector (SSAP over WebSocket) and driving a Sonos Bluetooth reconnect. Prioritize: connection lifecycle (close on every failure path), absolute deadlines on network I/O, killable and reaped screenshot workers, screenshot destination/size validation, never logging the LG client key or environment secrets, and honest evidence reporting (BT_ROUTE_STABLE does not prove device identity or audible playback). Keep features covered in tests/; tests must not touch real devices.",
+  "disabledLabels": [],
+  "statusCheck": false
+}

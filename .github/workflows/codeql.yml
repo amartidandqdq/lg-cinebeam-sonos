@@ -1,0 +1,25 @@
+name: codeql
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+permissions:
+  contents: read
+  security-events: write
+jobs:
+  analyze:
+    name: analyze (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
