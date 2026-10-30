@@ -113,6 +113,10 @@ remain unverified by design, per the no-claim reporting.
 
 The proposed 30/30, 20/20 and 48 h thresholds are acceptance goals, not measurements. For the Bluetooth-only installation, irrelevant physical manual-output scenarios can be waived explicitly while their simulation guards remain. No release claim of 10/10 until applicable thresholds are accepted and measured.
 
+### Wake campaign run — 2026-10-30
+
+A later run in the sibling directory `lg-cinebeam-sonos-campaign` is recorded in `campaign_results.jsonl` and `campaign_state.json` (source files read 2026-10-30). It holds 25 records: cycles 1–5 are `ok` (2026-10-28, the five-cycle campaign above) and cycles 6–25 are `wake_failed` (2026-10-29, 09:10–10:43 CET). In every failed cycle the turn-off returned rc 1 and the watcher reported the extinction as `already_registered`. Reading `watcher.log` and the driver code (inferred, not reproduced), these 20 cycles are not full off/on cycles: the projector had been off since 2026-10-28 22:23:37 (about 10 h 47 min) when the campaign was relaunched, rc 1 most likely means no turn-off reached it, `already_registered` points to that stale 22:23:37 log line, and the failures are Wake-on-LAN attempts that got no answer. The cause of the missing WoL answer is not established (standby / Quick Start+ settings are undocumented). The state file records `streak` 0, `best_streak` 5, `successes` 5 and `attempts` 25. Cycle 26 reached its turn-off step at 10:51 (log time) with the extinction registered, but no result was recorded and `campaign.log` has no later entry or stop reason. The 30/30 goal is not met, and the acceptance criteria are therefore NOT met.
+
 ## Campaign entry template
 
 Record date/time, script commit/VERSION, exact projector and speaker firmware builds, initial route/source, scenario, elapsed time, API evidence level, visible popup result, human acoustic confirmation, result and residual uncertainty. Never record secrets or private screen content. For endurance, record baseline/end service PID, restart count, RSS, log sizes and elapsed real time; do not equate a stable PID with no leak.
