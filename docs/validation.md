@@ -71,6 +71,13 @@ policy.
 The 48-hour endurance window opened at 2026-10-28 21:48:44 CET from service start
 (PID 4143521); final PID, restart count, RSS and log sizes are to be recorded at closure.
 
+**Window interrupted (recorded 2026-10-30).** `watcher.log` shows the watcher restarting
+at 2026-10-29 23:02:37 and 23:04:06, and at 2026-10-30 19:15:15, 19:17:12 and 20:06:31.
+The service running at 20:06:31 has PID 1192 and about 24 MB RSS; the low PID suggests a
+host reboot, which was not verified. The continuous 48 h window is therefore not met and
+no endurance hours are credited. A new uninterrupted window must be started and recorded
+(start time, PID, restart count, RSS, log sizes) before this row can close.
+
 #### Five-cycle campaign — 2026-10-28 22:13–22:23 CET
 
 Five consecutive off/on cycles were driven remotely (SSAP `system/turnOff` plus
@@ -102,7 +109,7 @@ remain unverified by design, per the no-claim reporting.
 | Strict screenshot/WSS certificate policy | Unit boundaries and ephemeral loopback TLS test | Endpoint certificate compatibility pending |
 | Pair permissions | Existing manifest preserved; refusal preserves key | Minimal subset pending, no working-key replacement |
 | Install, key/config preservation, backup | Temporary home-directory regression | Candidate upgrade performed 2026-10-28 with backups and preserved key/config; rollback not exercised |
-| 48-hour resource/log endurance | Log size bounded; no inference from fake clock | Window opened 2026-10-28 21:48 CET; 0 h recorded |
+| 48-hour resource/log endurance | Log size bounded; no inference from fake clock | Window opened 2026-10-28 21:48 CET, interrupted by restarts on 2026-10-29/30; 0 h credited, new window pending |
 
 The proposed 30/30, 20/20 and 48 h thresholds are acceptance goals, not measurements. For the Bluetooth-only installation, irrelevant physical manual-output scenarios can be waived explicitly while their simulation guards remain. No release claim of 10/10 until applicable thresholds are accepted and measured.
 
