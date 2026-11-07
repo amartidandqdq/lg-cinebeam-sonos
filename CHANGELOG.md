@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 — 2026-11-07
+- Add opt-in `AUTO_RECOVER_DROPS`: when the target BT route falls back to the projector
+  speaker while the projector stays on (observed 2026-11-07 around 12:50), reconnect with
+  Luna only after two consecutive readings, at most 5 times per power-on, never at startup.
+- A definitive failure clears the BT memory so retries stop until the next power-on.
+
 ## 0.3.0 — 2026-11-07
 Promoted from 0.3.0-rc.1 by owner decision on ten days of daily field use (see
 docs/validation.md, "Field use"); the formal 30/30 campaign and 48 h endurance rows stay open.

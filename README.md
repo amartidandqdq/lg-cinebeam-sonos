@@ -23,6 +23,7 @@ The Luna technique comes from [lgtv-control-mcp](https://github.com/brunofgmag/l
 ### Choices and ambiguity
 
 - Short interruptions are observation-only by default. `AUTO_RECOVER_BLIPS=1` opts into Luna-only recovery when the target route was present before interruption and the default speaker route appears afterwards. This is useful for Bluetooth-only installations but can override a manual speaker choice made during the outage.
+- A Sonos that drops while the projector stays on is not recovered by default. `AUTO_RECOVER_DROPS=1` opts into a Luna-only reconnect after two consecutive projector-speaker readings following a target route, at most 5 times per power-on, and never at service startup. Other outputs (ARC, headphones) are never taken back; a manual switch to the projector speaker is undone.
 - `tv_speaker` selected manually is indistinguishable from the default after a failed BT connection. Use `--pause` before a deliberate speaker session.
 - Another `bt_*` output is not treated as proof of Sonos identity and is not taken over.
 - Menu fallback is off by default. `MENU_FALLBACK=1` plus `MENU_PROFILE=hu710qke-webos24` allows **one** sequence on the first round after a detected cycle. Never on startup or retry. Firmware/theme changes require local visual validation.
@@ -55,6 +56,7 @@ Edit `~/sonos-watcher/watcher.env` before pairing or starting. Set the real addr
 | `WARMUP` | `25` | 0–300 seconds after detected off/on |
 | `STABILITY_SECONDS` | `10` | 10–60 seconds spanning three exact-route readings |
 | `AUTO_RECOVER_BLIPS` | `0` | Opt-in aggressive ambiguous-outage recovery |
+| `AUTO_RECOVER_DROPS` | `0` | Opt-in Luna-only reconnect when the BT route drops to the projector speaker while it stays on |
 | `MENU_FALLBACK` | `0` | Opt-in visible UI fallback |
 | `MENU_PROFILE` | unset | Must be `hu710qke-webos24` when menu fallback enabled |
 | `MENU_KEYS` | measured layout | Comma-separated UP/DOWN/LEFT/RIGHT/ENTER/EXIT/BACK/HOME |
