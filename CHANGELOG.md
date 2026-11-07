@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 — 2026-11-07
+- Fix (found by Codex review of #17): after a failed drop or blip recovery, the next retry
+  re-ran the startup observation and was counted as a new drop, resetting the retry ladder.
+  Retries now advance 15 s → 2 → 10 → 30 min and stop; the startup observation runs once.
+
 ## 0.3.1 — 2026-11-07
 - Add opt-in `AUTO_RECOVER_DROPS`: when the target BT route falls back to the projector
   speaker while the projector stays on (observed 2026-11-07 around 12:50), reconnect with

@@ -173,6 +173,15 @@ def test_ambiguous_outage_does_not_take_output_back(sim):
     assert sim["run"]() == ["luna"]
 
 
+def test_failed_blip_recovery_follows_retry_ladder(sim, watcher, monkeypatch):
+    monkeypatch.setattr(watcher, "AUTO_RECOVER_BLIPS", True)
+    sim["script"] = [True, "reboot", {"connect_works": False}, True]
+    sim["run"]()
+    log = watcher.LOG_FILE.read_text()
+    assert log.count("sortie BT perdue apres une coupure") == 1
+    assert "dans 2 min" in log and "echec definitif" in log
+
+
 def test_explicit_blip_recovery_is_luna_only(sim, watcher, monkeypatch):
     monkeypatch.setattr(watcher, "AUTO_RECOVER_BLIPS", True)
     sim["script"] = [True, "reboot", True]
