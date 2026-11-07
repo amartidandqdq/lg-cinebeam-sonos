@@ -36,7 +36,7 @@ def test_menu_never_used_on_retries_or_adopted_session(watcher):
 
 def test_retry_delays_are_bounded(watcher):
     delays = [watcher.retry_delay(n) for n in range(1, 6)]
-    assert delays == [120, 600, 1800, None, None]
+    assert delays == [15, 120, 600, 1800, None]
 
 
 @pytest.mark.parametrize("addr", ["", "aa:bb:cc:00:00:a9", "C4:38:75:1C:7D:AA".lower() + "x", "c4-38-75-1c-7d-a9"])

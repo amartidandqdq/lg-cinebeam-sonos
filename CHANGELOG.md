@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-07
+Promoted from 0.3.0-rc.1 by owner decision on ten days of daily field use (see
+docs/validation.md, "Field use"); the formal 30/30 campaign and 48 h endurance rows stay open.
+- Retry a failed round after 15 s first (then 2, 10, 30 min): a single slow first attempt no
+  longer delays Sonos sound by several minutes.
+- Tolerate a pointer-socket timeout when accepting the Bluetooth popup: the press is retried
+  on the next popup check instead of abandoning the round.
+- Skip the final `changeSoundOutput` when the popup already selected the target route, and
+  give it a 10 s deadline otherwise (the projector answers slowly right after BT connect).
+- After `output_rolled_back`, start the next Luna attempt after 2 s instead of 5 s.
+- Log a websocket outage once and its recovery once, instead of every 15 s while watching.
+
+## Earlier unreleased changes (shipped in 0.3.0)
 - Stabilize the loopback TLS integration test: the test server now negotiates TLS 1.2, avoiding an
   intermittent websockets handshake timeout in CI while still exercising real certificate pinning.
 - Refocus the repository on the Sonos reconnect: removed the unrelated projector-cleanup plan, scripts,
@@ -11,7 +23,7 @@
   automatic recovery, a 5/5 consecutive rapid-cycle campaign, and an opened 48-hour
   endurance window; the stable release remains gated on the hardware campaign.
 
-## 0.3.0-rc.1 — not deployed
+## 0.3.0-rc.1 — deployed 2026-10-28
 - Accept completed Content-Length screenshots when HTTP/1.0 or Connection: close has
   closed the socket; cover length, EOF and chunked loopback responses.
 - Final boundary regressions: recheck pause after the last route read; bound DNS/TCP/TLS
