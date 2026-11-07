@@ -15,6 +15,6 @@ All five lots are merged to `main` (squash merges, in order #2, #12, #6, #8, #10
 | 5 | [#10](https://github.com/amartidandqdq/lg-cinebeam-sonos/pull/10) | main | Controls, operations, CI, review corrections |
 
 The tagged baseline `v0.2.2` resolves to `daf39f76b5349f65b98a5a288ff06ae35b2eac59`.
-The current release is `0.3.1` (2026-11-07; 0.3.0 the same day), promoted from `0.3.0-rc.1` on field-use evidence; see docs/validation.md.
+The current release is `0.3.2` (2026-11-07; 0.3.0 and 0.3.1 the same day), promoted from `0.3.0-rc.1` on field-use evidence; see docs/validation.md.
 OpenSpec remains active for outstanding physical validation. See [validation](validation.md)
 and [rollback](operations.md).

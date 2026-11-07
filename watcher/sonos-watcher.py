@@ -627,6 +627,7 @@ def main():
 
     tracker = PowerTracker()
     adopted = True      # projecteur deja allume au demarrage du service : jamais de touches
+    observed = False    # observation de demarrage faite (une seule fois, pas apres une reprise luna)
     had_miss = False    # une sonde a rate depuis la derniere lecture de la sortie
     last_bt = False     # derniere sortie lue = bt_* (permet de reperer un cycle plus court que OFF_AFTER)
     n = 0
@@ -645,6 +646,7 @@ def main():
         elif event == "on":
             log(f"projecteur detecte — warmup {WARMUP} s...")
             adopted, had_miss, last_bt, drop_reads, drops = False, False, False, 0, 0
+            observed = True  # vrai allumage : plus d'observation de demarrage pour ce service
             time.sleep(WARMUP)
         if PAUSE_FILE.exists():
             time.sleep(POLL)
@@ -687,9 +689,9 @@ def main():
 
         kind = classify_output(out)
         is_bt = kind == "TARGET"
-        if adopted and not handled:
+        if adopted and not observed:
             log(f"observation au demarrage: {kind}; identite BT non verifiee")
-            handled = True
+            handled, observed = True, True
         if handled:
             if AUTO_RECOVER_BLIPS and had_miss and last_bt and kind == "DEFAULT_FALLBACK":
                 # BT actif avant la coupure, autre sortie au retour : cela peut etre un redemarrage

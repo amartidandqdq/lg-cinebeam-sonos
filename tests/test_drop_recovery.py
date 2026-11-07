@@ -37,10 +37,15 @@ def test_drop_recoveries_are_capped_per_power_on(sim, drops_on, watcher):  # noq
     assert calls == ["luna"] * (1 + watcher.MAX_DROP_RECOVERIES)
 
 
-def test_failed_drop_recovery_stops_until_next_power_on(sim, drops_on):  # noqa: F811
+def test_failed_drop_recovery_follows_retry_ladder_then_stops(sim, drops_on, watcher):  # noqa: F811
     sim["script"] = [True, True, {"out": "tv_speaker", "connect_works": False}, True]
     calls = sim["run"]()
     assert calls == ["luna"] + ["luna", "luna"] * 5  # first round + 4 bounded retries, then stop
+    log = watcher.LOG_FILE.read_text()
+    assert log.count("route BT perdue projecteur allume") == 1  # retries are not new drops
+    assert [d in log for d in ("dans 15 s", "dans 2 min", "dans 10 min", "dans 30 min")] == [True] * 4
+    assert "echec definitif" in log
+    assert log.count("observation au demarrage") == 0
 
 
 def test_startup_on_tv_speaker_stays_observation(sim, drops_on):  # noqa: F811
