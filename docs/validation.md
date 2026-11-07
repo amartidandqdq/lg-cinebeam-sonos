@@ -121,6 +121,18 @@ A later run in the sibling directory `lg-cinebeam-sonos-campaign` is recorded in
 
 Record date/time, script commit/VERSION, exact projector and speaker firmware builds, initial route/source, scenario, elapsed time, API evidence level, visible popup result, human acoustic confirmation, result and residual uncertainty. Never record secrets or private screen content. For endurance, record baseline/end service PID, restart count, RSS, log sizes and elapsed real time; do not equate a stable PID with no leak.
 
+### Field use — 2026-10-28 to 2026-11-07
+
+Read from `watcher.log` on the reference host on 2026-11-07. Over normal daily use the
+candidate logged 15 route attempts: 13 ended `BT_ROUTE_STABLE`, one `output_rolled_back`
+(recovered by the second Luna attempt 36 s later, 2026-11-07 01:32) and one
+`command_failed detail=TimeoutError` right after the popup was accepted (2026-11-07 12:17;
+recovered by the 2-minute retry, so Sonos sound arrived about 3 minutes after power-on).
+Every power-on in the log ended on the target route. Repeated `WS indisponible` lines while
+the projector stayed on were transient websocket drops with no effect on the route. These
+two failures motivated the 0.3.0 changes (15 s first retry, tolerant popup press, no
+redundant output write). Identity and audible audio remain unverified by the watcher.
+
 ## Release gate
 
-Five reviewable PR slices, focused tests, Ruff, Gitleaks and Python 3.11/3.12/3.13 CI are required. Hardware-only rows remain open until executed under explicit deployment/test instructions. Tag stable 0.3.0 only afterwards. The active OpenSpec change tracks the remaining campaign.
+Five reviewable PR slices, focused tests, Ruff, Gitleaks and Python 3.11/3.12/3.13 CI are required. Hardware-only rows were meant to close before tagging 0.3.0. On 2026-11-07 the owner chose to release 0.3.0 on the field-use evidence above instead; the 30/30 campaign, 48 h endurance and strict-TLS rows remain open and are tracked by the active OpenSpec change.

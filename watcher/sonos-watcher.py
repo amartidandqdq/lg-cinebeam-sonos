@@ -38,7 +38,9 @@ SCAN = 15          # s entre deux scans quand il est eteint
 WARMUP = os.environ.get("WARMUP", 25)  # s d'attente apres l'allumage (services webOS)
 OFF_AFTER = 4      # sondes ratees d'affilee avant de conclure "eteint" (coupure LAN != extinction)
 BLIP_POLL = 5      # s entre deux sondes quand une sonde vient d'echouer
-RETRY_DELAYS = (120, 600, 1800)  # s avant chaque reprise apres un echec ; ensuite on abandonne
+RETRY_DELAYS = (15, 120, 600, 1800)  # s avant chaque reprise apres un echec ; ensuite on abandonne
+ROLLBACK_PAUSE = 2  # s entre deux essais luna quand la sortie est revenue sur tv_speaker
+CHANGE_OUTPUT_TIMEOUT = 10  # s : le projecteur repond lentement juste apres la connexion BT
 STABILITY_SECONDS = os.environ.get("STABILITY_SECONDS", 10)
 MENU_FALLBACK = os.environ.get("MENU_FALLBACK", "0") == "1"
 MENU_PROFILE = os.environ.get("MENU_PROFILE", "")
@@ -90,6 +92,10 @@ def methods_for(failed_rounds, adopted):
     if failed_rounds == 0 and not adopted and MENU_FALLBACK and MENU_PROFILE == "hu710qke-webos24":
         return ["luna", "luna", "menu"]
     return ["luna", "luna"]
+
+
+def fmt_delay(seconds):
+    return f"{seconds} s" if seconds < 60 else f"{seconds // 60} min"
 
 
 def retry_delay(failed_rounds):
@@ -271,11 +277,23 @@ def luna_connect(ws, n):
                     or classify_output(sound_output(ws, n + 50 + k)) not in ("TARGET", "DEFAULT_FALLBACK")):
                 return
             log("  popup de connexion detecte -> Yes")
-            press(ws, n + 30, "ENTER")
+            try:
+                press(ws, n + 30 + k, "ENTER")
+            except (OSError, TimeoutError) as exc:
+                # Socket pointeur lent juste apres l'allumage : le popup reste affiche, on reessaie
+                # au tour suivant sans abandonner la session principale.
+                log(f"  appui Yes impossible ({exc.__class__.__name__}) — nouvel essai")
+                continue
             time.sleep(3)
             break
-    if audio_action_allowed(ws, n + 3):
-        call(ws, n + 2, "ssap://com.webos.service.apiadapter/audio/changeSoundOutput", {"output": TARGET})
+    if PAUSE_FILE.exists():
+        return
+    out = sound_output(ws, n + 3)
+    if out == TARGET:
+        return  # le popup a suffi : inutile de reecrire la sortie sur un projecteur encore occupe
+    if not PAUSE_FILE.exists() and classify_output(out) == "DEFAULT_FALLBACK":
+        call(ws, n + 2, "ssap://com.webos.service.apiadapter/audio/changeSoundOutput", {"output": TARGET},
+             t=CHANGE_OUTPUT_TIMEOUT)
 
 
 # (x, y) -> couleur attendue sur une capture 960x540 du popup "<Sonos> wants to connect"
@@ -489,7 +507,7 @@ def connect_round(ws, n, methods):
         log(f"attempt={i} method={how} evidence={result.evidence} reason={result.reason}")
         if result.route_stable or result.reason in ("other_or_unknown_output", "status_timeout"):
             return result, n
-        time.sleep(5)
+        time.sleep(ROLLBACK_PAUSE if result.reason == "output_rolled_back" else 5)
     return result, n
 
 
@@ -611,12 +629,13 @@ def main():
     handled = False     # traite pour cet allumage (connecte, choix manuel respecte ou abandon)
     failed_rounds = 0
     next_try = 0.0      # monotonic : pas de reprise avant cet instant
+    ws_down = False     # WS deja signale indisponible : on ne le relogue pas a chaque essai
 
     while True:
         event = tracker.update(reachable())
         if event == "off":
             log("projecteur eteint — surveillance du reseau...")
-            handled, failed_rounds, next_try = False, 0, 0.0
+            handled, failed_rounds, next_try, ws_down = False, 0, 0.0, False
         elif event == "on":
             log(f"projecteur detecte — warmup {WARMUP} s...")
             adopted, had_miss, last_bt = False, False, False
@@ -642,9 +661,14 @@ def main():
             register(ws, ck)
         except Exception as e:
             close(ws)
-            log(f"WS indisponible ({e.__class__.__name__}) — nouvelle tentative dans {SCAN}s")
+            if not ws_down:
+                log(f"WS indisponible ({e.__class__.__name__}) — nouvelles tentatives toutes les {SCAN}s")
+                ws_down = True
             time.sleep(SCAN)
             continue
+        if ws_down:
+            log("WS retabli")
+            ws_down = False
 
         n += 1
         try:
@@ -692,7 +716,7 @@ def main():
                     log("echec definitif — Sonos eteinte ou hors de portee ? (reessai au prochain allumage)")
                     handled = True
                 else:
-                    log(f"echec — reprise (luna seul) dans {delay // 60} min")
+                    log(f"echec — reprise (luna seul) dans {fmt_delay(delay)}")
                     next_try = time.monotonic() + delay
         close(ws)
         time.sleep(POLL)

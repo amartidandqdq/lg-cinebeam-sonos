@@ -16,7 +16,7 @@ A small local Python service reconnects a paired Sonos after the projector retur
 3. Wait the configured warmup. Only the default `tv_speaker` output is eligible for automatic recovery; other outputs are preserved from the first reading.
 4. Request A2DP via the existing Luna alert-close technique. Confirm the popup only if the known focused-Yes visual signature matches. No blind ENTER.
 5. Require three exact `bt_soundbar` readings spanning at least ten seconds. Report `BT_ROUTE_STABLE`; device identity, A2DP link and audible sound remain unverified.
-6. Retry failed rounds after 2, 10 and 30 minutes, Luna only; then stop until the next detected cycle. Recheck the output before each method.
+6. Retry failed rounds after 15 s, then 2, 10 and 30 minutes, Luna only; then stop until the next detected cycle. Recheck the output before each method.
 
 The Luna technique comes from [lgtv-control-mcp](https://github.com/brunofgmag/lgtv-control-mcp): closing an alert triggers its internal `luna://com.webos.service.bluetooth2/a2dp/connect` URI. That protocol is preserved.
 

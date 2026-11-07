@@ -90,7 +90,7 @@ def test_fresh_power_on_replays_menu_once_then_luna_only_retries(sim):
     calls = sim["run"]()
     assert calls[:3] == ["luna", "luna", "menu"]
     assert calls.count("menu") == 1
-    assert len(calls) == 3 + 3 * 2
+    assert len(calls) == 3 + 4 * 2
 
 
 def test_lan_blip_does_not_trigger_a_new_reconnect(sim):
