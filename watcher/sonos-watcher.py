@@ -45,6 +45,10 @@ STABILITY_SECONDS = os.environ.get("STABILITY_SECONDS", 10)
 MENU_FALLBACK = os.environ.get("MENU_FALLBACK", "0") == "1"
 MENU_PROFILE = os.environ.get("MENU_PROFILE", "")
 AUTO_RECOVER_BLIPS = os.environ.get("AUTO_RECOVER_BLIPS", "0") == "1"
+# Reconnexion quand la route BT retombe sur tv_speaker projecteur allume (Sonos decrochee).
+AUTO_RECOVER_DROPS = os.environ.get("AUTO_RECOVER_DROPS", "0") == "1"
+DROP_CONFIRM_READS = 2   # lectures tv_speaker consecutives (>= 1 POLL) avant d'agir
+MAX_DROP_RECOVERIES = 5  # par allumage : au-dela, on laisse la sortie telle quelle
 
 
 def classify_output(output):
@@ -534,7 +538,7 @@ def validate_config():
     if any(key not in {"UP", "DOWN", "LEFT", "RIGHT", "ENTER", "EXIT", "BACK", "HOME"} for key in keys):
         raise ValueError("MENU_KEYS contains an unsupported key")
     values["MENU_KEYS"] = keys
-    for name in ("AUTO_RECOVER_BLIPS", "MENU_FALLBACK", "ALLOW_INSECURE_TLS"):
+    for name in ("AUTO_RECOVER_BLIPS", "AUTO_RECOVER_DROPS", "MENU_FALLBACK", "ALLOW_INSECURE_TLS"):
         text = os.environ.get(name, "1" if globals()[name] else "0")
         if text not in ("0", "1"):
             raise ValueError(f"{name} must be 0 or 1")
@@ -630,6 +634,8 @@ def main():
     failed_rounds = 0
     next_try = 0.0      # monotonic : pas de reprise avant cet instant
     ws_down = False     # WS deja signale indisponible : on ne le relogue pas a chaque essai
+    drop_reads = 0      # lectures tv_speaker consecutives alors que la route BT etait active
+    drops = 0           # reconnexions apres perte de route pour cet allumage
 
     while True:
         event = tracker.update(reachable())
@@ -638,7 +644,7 @@ def main():
             handled, failed_rounds, next_try, ws_down = False, 0, 0.0, False
         elif event == "on":
             log(f"projecteur detecte — warmup {WARMUP} s...")
-            adopted, had_miss, last_bt = False, False, False
+            adopted, had_miss, last_bt, drop_reads, drops = False, False, False, 0, 0
             time.sleep(WARMUP)
         if PAUSE_FILE.exists():
             time.sleep(POLL)
@@ -690,7 +696,25 @@ def main():
                 # plus court que OFF_AFTER. On reconnecte par luna seul, sans navigation dans les menus.
                 log("sortie BT perdue apres une coupure — reconnexion (luna seul)")
                 handled, failed_rounds, next_try, adopted = False, 0, 0.0, True
+            elif AUTO_RECOVER_DROPS and not had_miss and last_bt and kind == "DEFAULT_FALLBACK":
+                # Projecteur reste allume, Sonos decrochee : on confirme puis on reconnecte (luna seul).
+                drop_reads += 1
+                if drop_reads < DROP_CONFIRM_READS:
+                    close(ws)
+                    time.sleep(POLL)
+                    continue
+                drop_reads = 0
+                if drops >= MAX_DROP_RECOVERIES:
+                    log(f"route BT perdue {drops + 1} fois depuis l'allumage — sortie laissee telle quelle")
+                    last_bt = False
+                    close(ws)
+                    time.sleep(POLL)
+                    continue
+                drops += 1
+                log("route BT perdue projecteur allume — reconnexion (luna seul)")
+                handled, failed_rounds, next_try, adopted = False, 0, 0.0, True
             else:
+                drop_reads = 0
                 last_bt, had_miss = is_bt, False
                 close(ws)
                 time.sleep(POLL)
@@ -714,7 +738,7 @@ def main():
                 delay = retry_delay(failed_rounds)
                 if delay is None:
                     log("echec definitif — Sonos eteinte ou hors de portee ? (reessai au prochain allumage)")
-                    handled = True
+                    handled, last_bt = True, False
                 else:
                     log(f"echec — reprise (luna seul) dans {fmt_delay(delay)}")
                     next_try = time.monotonic() + delay
