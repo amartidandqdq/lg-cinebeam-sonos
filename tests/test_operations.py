@@ -24,6 +24,7 @@ def test_diagnose_does_not_connect_audio(watcher, monkeypatch, tmp_path):
     key = tmp_path/'key'
     key.write_text('private-test-key')
     key.chmod(0o600)
+    monkeypatch.setattr(watcher, 'ROOT_MODE', 'ssap')  # hermetic: root layer is tested separately
     monkeypatch.setattr(watcher, 'CK_FILE', key)
     monkeypatch.setattr(watcher, 'PAUSE_FILE', tmp_path/'paused')
     monkeypatch.setattr(watcher, 'reachable', lambda: True)

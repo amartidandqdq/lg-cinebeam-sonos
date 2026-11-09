@@ -26,6 +26,8 @@ reviews:
         - Evidence honesty is a release requirement: do not claim device identity, A2DP
           link or audible audio beyond BT_ROUTE_STABLE, and keep hardware-only gates open
           unless the docs already record measured facts.
+        - Main-loop decisions live in class Recovery; phase changes must go through
+          Recovery._enter() and stay documented in docs/state-machine.md.
     - path: "tests/**"
       instructions: |
         - Behavior changes must come with coverage; tests must stay deterministic and

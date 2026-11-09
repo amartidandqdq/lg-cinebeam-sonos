@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.0 — 2026-11-09
+- Optional read-only root transport (`ROOT_MODE=auto|ssap|root`): the watcher reads the real
+  A2DP link state (`bluetooth2/a2dp/getStatus`) and `/proc/uptime` over SSH instead of inferring
+  from `soundOutput`. Steps 1-2 of the root plan: visibility only, no writes — `connect`, popup
+  and output writes stay SSAP. Measured on firmware 03.00.27: `luna-send` requires a PTY
+  (`ssh -tt`), returns rc=0 with no output otherwise, and the reply contract parses the last
+  JSON line and treats rc=0 + empty output as a transport error.
+- New `bt_link_lost` visibility: the measured failure where the route claims the BT target while
+  the A2DP link is down (2026-11-09 19:52) is now detected, confirmed on two reads, logged once
+  per episode and published in `state.json` (`link`). The ambiguous `errorCode 106` maps to
+  `unavailable` and never triggers action pending discrimination (reset bluetooth2 vs unpair vs
+  address change).
+- The 25 s warmup is skipped when uptime proves the projector did not reboot (network blip);
+  kept after a real reboot. Root is probed at startup and re-probed at each power-on and always
+  degrades silently to SSAP (the projector cuts its Wi-Fi in standby; a failed startup probe is
+  normal, never fatal).
+- `--diagnose` gains a `root` tri-state (`ssh` / `luna` / `link`), consulted even while the WS
+  is down. SSH host keys are pinned on first connection (`ROOT_KNOWN_HOSTS`, accept-new): a host
+  key change becomes a hard error instead of a silent prompt.
+- New env: `ROOT_MODE` (default auto), `ROOT_SSH_KEY`, `ROOT_KNOWN_HOSTS`, `LINK_POLL`
+  (default 60 s, bounded 20-600). Without SSH the behavior is unchanged (existing suite green;
+  new coverage in `tests/test_root_link.py`).
+
+## 0.3.3 — 2026-11-08
+- Make the main loop's recovery lifecycle explicit: a `Phase` enum (`STARTUP_OBSERVE`, `OFF`,
+  `RECOVER`, `RETRY_WAIT`, `WATCH`) and a `Recovery` class replace ten interacting flags.
+  Behavior is unchanged (existing suite untouched; old/new loops identical on 3000 randomized
+  simulated scenarios). See docs/state-machine.md.
+- Log each phase change once as `state=OLD->NEW reason=...`.
+- `--diagnose` now reports the daemon's phase, reason, retry/drop counters and next retry time
+  under `watcher`, read from `~/sonos-watcher/state.json` (written only on change, no secrets).
+
 ## 0.3.2 — 2026-11-07
 - Fix (found by Codex review of #17): after a failed drop or blip recovery, the next retry
   re-ran the startup observation and was counted as a new drop, resetting the retry ladder.

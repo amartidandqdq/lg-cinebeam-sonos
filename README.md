@@ -102,7 +102,7 @@ systemctl --user start sonos-watcher
 journalctl --user -u sonos-watcher --since today
 ```
 
-Diagnostics establish TCP reachability, authenticated SSAP, output route and last logged attempt. `BT_ROUTE_SELECTED` is a single setting read; `BT_ROUTE_STABLE` is three readings. Neither means `BT_LINK_CONFIRMED` or `AUDIO_VERIFIED`. A human confirmed audio on the deployed old version, not permanently for every future connection. Sonos UPnP media state was seen reporting a stopped radio while Bluetooth sound was heard; it is not used as independent BT proof.
+Diagnostics establish TCP reachability, authenticated SSAP, output route, last logged attempt and, under `watcher`, the running daemon's recovery phase (`STARTUP_OBSERVE`, `OFF`, `RECOVER`, `RETRY_WAIT` with `next_retry_at`, `WATCH`) with its reason, retry and drop counters; see [state machines](docs/state-machine.md). Phase changes are logged as `state=OLD->NEW reason=...`. `BT_ROUTE_SELECTED` is a single setting read; `BT_ROUTE_STABLE` is three readings. Neither means `BT_LINK_CONFIRMED` or `AUDIO_VERIFIED`. A human confirmed audio on the deployed old version, not permanently for every future connection. Sonos UPnP media state was seen reporting a stopped radio while Bluetooth sound was heard; it is not used as independent BT proof.
 
 Log lines include attempt/method/evidence/reason. The local log rotates at roughly 1 MB with three backups; journald retention is controlled by the host. No screenshots are saved by the watcher. Legacy debug tools may capture content: use them locally and never publish private captures.
 

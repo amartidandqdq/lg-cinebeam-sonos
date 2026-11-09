@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Conservative local Bluetooth recovery for the measured LG HU710QKE / webOS 24.
 Observe at startup; recover default output after a detected off/on cycle. Exact route
-stability does not prove device identity, A2DP connection or audible audio. See README.
+stability does not prove device identity, A2DP connection or audible audio. See README;
+the main-loop phases (class Recovery) are documented in docs/state-machine.md.
 """
 import argparse
 import hashlib
@@ -13,6 +14,7 @@ import logging
 import os
 import pathlib
 import re
+import shlex
 import socket
 import ssl
 import subprocess
@@ -21,6 +23,7 @@ import threading
 import time
 import urllib.parse
 from datetime import datetime
+from enum import Enum
 from logging.handlers import RotatingFileHandler
 from typing import NamedTuple
 
@@ -49,6 +52,11 @@ AUTO_RECOVER_BLIPS = os.environ.get("AUTO_RECOVER_BLIPS", "0") == "1"
 AUTO_RECOVER_DROPS = os.environ.get("AUTO_RECOVER_DROPS", "0") == "1"
 DROP_CONFIRM_READS = 2   # lectures tv_speaker consecutives (>= 1 POLL) avant d'agir
 MAX_DROP_RECOVERIES = 5  # par allumage : au-dela, on laisse la sortie telle quelle
+ROOT_MODE = os.environ.get("ROOT_MODE", "auto")  # auto|ssap|root : lecture du lien A2DP par SSH root
+ROOT_SSH_KEY = os.environ.get("ROOT_SSH_KEY", str(pathlib.Path.home() / ".ssh" / "id_ed25519"))
+ROOT_KNOWN_HOSTS = os.environ.get("ROOT_KNOWN_HOSTS", str(pathlib.Path.home() / ".ssh" / "known_hosts.cinebeam"))
+LINK_POLL = float(os.environ.get("LINK_POLL", 60))  # s entre deux lectures du lien quand la route est cible
+LINK_CONFIRM_READS = 2  # lectures lien non connecte consecutives avant de declarer bt_link_lost
 
 
 def classify_output(output):
@@ -105,6 +113,219 @@ def fmt_delay(seconds):
 def retry_delay(failed_rounds):
     """Delai avant la reprise suivante (failed_rounds >= 1), None = abandon jusqu'au prochain allumage."""
     return RETRY_DELAYS[failed_rounds - 1] if failed_rounds <= len(RETRY_DELAYS) else None
+
+
+class Phase(str, Enum):
+    """Recovery phase for the current power-on. Diagram and transition table: docs/state-machine.md."""
+    STARTUP_OBSERVE = "STARTUP_OBSERVE"  # service started on a running projector: read once, never act
+    OFF = "OFF"                          # OFF_AFTER consecutive probes missed
+    RECOVER = "RECOVER"                  # next output reading may start a connect round
+    RETRY_WAIT = "RETRY_WAIT"            # a round failed; nothing until next_try (monotonic)
+    WATCH = "WATCH"                      # settled for this power-on; only drops/blips can reopen it
+
+
+class Recovery:
+    """Decisions of the main loop, without I/O: main() probes, reads and connects; this class decides.
+    Every phase change goes through _enter(), which logs `state=OLD->NEW reason=...`."""
+
+    def __init__(self):
+        self.phase = Phase.STARTUP_OBSERVE
+        self.reason = "service_start"
+        self.since = datetime.now().isoformat(timespec="seconds")
+        self.luna_only = True   # no menu keys: startup, blip/drop recovery (only a real power-on allows them)
+        self.failed_rounds = 0
+        self.next_try = 0.0     # monotonic : pas de reprise avant cet instant
+        self.had_miss = False   # une sonde a rate depuis la derniere lecture de la sortie
+        self.last_bt = False    # derniere sortie lue = bt_* (permet de reperer un cycle plus court que OFF_AFTER)
+        self.drop_reads = 0     # lectures tv_speaker consecutives alors que la route BT etait active
+        self.drops = 0          # reconnexions apres perte de route pour cet allumage
+        self.link_down = False  # WS deja signale indisponible : on ne le relogue pas a chaque essai
+        self.link = "unknown"   # dernier etat du lien A2DP lu par le root (state.json / --diagnose)
+        self.link_reads = 0     # lectures lien non connecte consecutives (confirmation bt_link_lost)
+        self.link_flag = False  # episode bt_link_lost en cours : log unique jusqu'au retablissement
+        self.link_episodes = 0  # episodes bt_link_lost depuis l'allumage
+
+    def _enter(self, phase, reason):
+        if phase is not self.phase:
+            log(f"state={self.phase.value}->{phase.value} reason={reason}")
+            self.since = datetime.now().isoformat(timespec="seconds")
+        self.phase, self.reason = phase, reason
+
+    # --- power and link events (PowerTracker / session) ---
+    def power_off(self):
+        self.failed_rounds, self.next_try, self.link_down = 0, 0.0, False
+        self._enter(Phase.OFF, "power_off")
+
+    def power_on(self):
+        self.luna_only, self.had_miss, self.last_bt, self.drop_reads, self.drops = False, False, False, 0, 0
+        self.link, self.link_reads, self.link_flag, self.link_episodes = "unknown", 0, False, 0
+        self._enter(Phase.RECOVER, "power_on")
+
+    def probe_missed(self):
+        self.had_miss = True
+
+    def waiting(self, now):
+        """True while a retry is scheduled; once due, the phase moves to RECOVER."""
+        if self.phase is not Phase.RETRY_WAIT:
+            return False
+        if now < self.next_try:
+            return True
+        self._enter(Phase.RECOVER, f"retry_{self.failed_rounds}_due")
+        return False
+
+    def session_failed(self):
+        """True only on the first failure, so an outage is logged once."""
+        first, self.link_down = not self.link_down, True
+        return first
+
+    def session_restored(self):
+        restored, self.link_down = self.link_down, False
+        return restored
+
+    # --- output readings ---
+    def on_reading(self, out):
+        """Process one output reading; True when a connect round must run now."""
+        kind = classify_output(out)
+        if self.phase is Phase.STARTUP_OBSERVE:
+            log(f"observation au demarrage: {kind}; identite BT non verifiee")
+            self._enter(Phase.WATCH, "startup_observation")
+        if self.phase is Phase.WATCH:
+            trigger = self._watch(kind)
+            if trigger is None:
+                return False
+            self.failed_rounds, self.next_try, self.luna_only = 0, 0.0, True
+            self._enter(Phase.RECOVER, trigger)
+        self.had_miss = False
+        if kind == "TARGET":
+            log("route BT cible selectionnee; identite non verifiee")
+            self.last_bt = True
+            self._enter(Phase.WATCH, "bt_route_selected")
+            return False
+        if kind != "DEFAULT_FALLBACK":
+            log(f"sortie changee a la main ({out}) — reprises annulees")
+            self._enter(Phase.WATCH, "other_output_respected")
+            return False
+        log(f"sortie actuelle {out} -> connexion Sonos...")
+        return True
+
+    def _watch(self, kind):
+        """WATCH: returns the reason to reopen recovery, or None to keep watching."""
+        if AUTO_RECOVER_BLIPS and self.had_miss and self.last_bt and kind == "DEFAULT_FALLBACK":
+            # BT actif avant la coupure, autre sortie au retour : cela peut etre un redemarrage
+            # plus court que OFF_AFTER. On reconnecte par luna seul, sans navigation dans les menus.
+            log("sortie BT perdue apres une coupure — reconnexion (luna seul)")
+            return "blip_lost_bt"
+        if AUTO_RECOVER_DROPS and not self.had_miss and self.last_bt and kind == "DEFAULT_FALLBACK":
+            # Projecteur reste allume, Sonos decrochee : on confirme puis on reconnecte (luna seul).
+            self.drop_reads += 1
+            if self.drop_reads < DROP_CONFIRM_READS:
+                return None
+            self.drop_reads = 0
+            if self.drops >= MAX_DROP_RECOVERIES:
+                log(f"route BT perdue {self.drops + 1} fois depuis l'allumage — sortie laissee telle quelle")
+                self.last_bt = False
+                self.reason = "drop_cap_reached"
+                return None
+            self.drops += 1
+            log("route BT perdue projecteur allume — reconnexion (luna seul)")
+            return "bt_route_dropped"
+        self.drop_reads = 0
+        self.last_bt, self.had_miss = kind == "TARGET", False
+        return None
+
+    def on_link(self, state):
+        """Enregistre un etat du lien A2DP lu par le root (appele en WATCH sur route cible).
+        Etape 1 : rendre la panne visible (route TARGET + lien mort, le cas du 2026-11-09 19:52) ;
+        aucune reprise ici, l'ecriture est l'etape 3. 'unavailable' (106) est ambigu
+        (reset bluetooth2, desappairage, adresse changee) : discrimination requise, pas d'action."""
+        previous, self.link = self.link, state
+        if state in ("connected", "connecting"):
+            self.link_reads = 0
+            if self.link_flag:
+                log("lien A2DP retabli")
+                self.link_flag = False
+            return
+        if state != "down":
+            if not self.link_flag or previous != state:
+                log(f"lien A2DP {state} — cas ambigu (106 ?), discrimination requise avant toute action")
+                self.link_flag = True
+            return
+        if not self.last_bt:
+            return  # route non cible : un lien mort sans route BT est un etat respecte
+        self.link_reads += 1
+        if self.link_reads < LINK_CONFIRM_READS:
+            return
+        self.link_reads = 0
+        if not self.link_flag:
+            self.link_flag = True
+            self.link_episodes += 1
+            self.reason = "bt_link_lost"
+            log(f"route BT affichee mais lien A2DP mort — panne visible (root, episode {self.link_episodes})")
+
+    def methods(self):
+        return methods_for(self.failed_rounds, self.luna_only)
+
+    def on_round(self, result, now):
+        if result.route_stable:
+            self.last_bt = True
+            self._enter(Phase.WATCH, "bt_route_stable")
+        elif result.reason == "other_or_unknown_output":
+            self._enter(Phase.WATCH, "other_output_respected")
+        else:
+            self.failed_rounds += 1
+            delay = retry_delay(self.failed_rounds)
+            if delay is None:
+                log("echec definitif — Sonos eteinte ou hors de portee ? (reessai au prochain allumage)")
+                self.last_bt = False
+                self._enter(Phase.WATCH, "retries_exhausted")
+            else:
+                log(f"echec — reprise (luna seul) dans {fmt_delay(delay)}")
+                self.next_try = now + delay
+                self._enter(Phase.RETRY_WAIT, result.reason)
+
+    def snapshot(self, now):
+        """JSON-safe view for --diagnose; no secrets, addresses or outputs."""
+        state = {"phase": self.phase.value, "reason": self.reason, "since": self.since,
+                 "failed_rounds": self.failed_rounds, "drops": self.drops, "max_drops": MAX_DROP_RECOVERIES,
+                 "session": "down" if self.link_down else "up", "link": self.link}
+        if self.phase is Phase.RETRY_WAIT:
+            at = datetime.now().timestamp() + max(0.0, self.next_try - now)
+            state["next_retry_at"] = datetime.fromtimestamp(at).isoformat(timespec="seconds")
+        return state
+
+
+def state_file():
+    return LOG_FILE.parent / "state.json"
+
+
+def save_state(state):
+    """Atomic best-effort write; a missing or read-only directory never stops the watcher."""
+    path = state_file()
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(dict(state, pid=os.getpid()), sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def load_state():
+    try:
+        state = json.loads(state_file().read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            return None
+    except (OSError, ValueError):
+        return None
+    pid = state.get("pid")
+    if isinstance(pid, int) and pid > 0:
+        try:
+            os.kill(pid, 0)
+            state["pid_alive"] = True
+        except PermissionError:
+            state["pid_alive"] = True
+        except OSError:
+            state["pid_alive"] = False
+    return state
 
 
 def validate_bt(addr):
@@ -255,6 +476,101 @@ def menu_connect(ws, n):
 
 
 SONOS_BT = os.environ.get("SONOS_BT", "")  # adresse BT de l'Arc Ultra (= MAC Wi-Fi)
+
+
+class RootError(RuntimeError):
+    """Echec du transport root. Contrat : jamais un succes sans preuve — rc=0 sans sortie
+    est une erreur, pas un succes (constat 2026-11-09 : luna-send sans PTY renvoie rc=0 muet)."""
+
+    def __init__(self, reason, detail=""):
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+
+
+class RootProbe:
+    """Lectures root par SSH. -tt obligatoire : sans PTY, luna-send renvoie rc=0 sans aucune
+    sortie — mecanisme intrinseque au PTY, verifie le 2026-11-09 (4 bras : -T direct, login
+    shell, XDG_RUNTIME_DIR exporte : tous muets ; -tt : OK). Lecture seule : a2dp/getStatus
+    et /proc/uptime. Les ecritures (connect, popup, sortie audio) restent SSAP — etape 3."""
+
+    def __init__(self, host, key, known_hosts):
+        self.host = host
+        self.key = key
+        self.known_hosts = known_hosts
+        self.available = False
+        self.reason = "not_probed"
+        self.last_uptime = None  # dernier echantillon ; sert de reference pour blip vs reboot
+        self.link = "unknown"
+        self.link_detail = {}
+
+    def _run(self, remote, timeout):
+        options = ["-tt", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=2",
+                   "-i", self.key,
+                   # Cle epinglee a la premiere connexion (accept-new) : un changement de host key
+                   # devient une erreur franche (MITM potentiel), pas un prompt silencieux.
+                   "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={self.known_hosts}"]
+        try:
+            result = subprocess.run(["ssh"] + options + [f"root@{self.host}", remote],
+                                    capture_output=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            raise RootError("ssh_timeout") from None
+        except OSError as exc:
+            raise RootError("ssh_unavailable", exc.__class__.__name__) from None
+        if result.returncode != 0:
+            raise RootError("ssh_failed", f"rc={result.returncode}")
+        lines = [ln.strip() for ln in result.stdout.decode("utf-8", errors="replace")
+                 .replace("\r", "\n").splitlines() if ln.strip()]
+        if not lines:
+            raise RootError("empty_output")
+        return lines[-1]  # derniere ligne non vide : insensible aux bannieres/eventuels \r de PTY
+
+    def luna(self, uri, payload=None, t=6):
+        """Appel luna one-shot. Erreur metier (errorCode) renvoyee telle quelle a l'appelant ;
+        echec de transport -> RootError. Budgets : -w en ms < timeout subprocess."""
+        remote = f"luna-send -n 1 -w {int(t * 1000)} {shlex.quote(uri)}"
+        if payload is not None:
+            remote += " " + shlex.quote(json.dumps(payload))
+        line = self._run(remote, t + 4)
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            raise RootError("bad_json", line[:60]) from None
+        if not isinstance(reply, dict):
+            raise RootError("bad_json", "not_an_object")
+        return reply
+
+    def probe(self):
+        """Detection bornee : /proc/uptime lisible = transport root operationnel."""
+        try:
+            self.uptime()
+            self.available, self.reason = True, "ok"
+        except RootError as exc:
+            self.available, self.reason = False, exc.reason
+        return self.available
+
+    def uptime(self):
+        line = self._run("cat /proc/uptime", 6)
+        try:
+            value = float(line.split()[0])
+        except (IndexError, ValueError):
+            raise RootError("bad_uptime", line[:40]) from None
+        self.last_uptime = value
+        return value
+
+    def link_status(self):
+        """connected / connecting / down / unavailable / unknown. Un lien coupe mais appaire
+        devrait repondre connected:false ; 106 signale plutot un reset bluetooth2, un
+        desappairage ou une adresse changee — d'ou 'unavailable', distinct de 'down'."""
+        reply = self.luna("luna://com.webos.service.bluetooth2/a2dp/getStatus", {"address": SONOS_BT})
+        if not reply.get("returnValue"):
+            code = reply.get("errorCode")
+            self.link_detail = {"errorCode": code}
+            self.link = "unavailable" if code == 106 else "unknown"
+            return self.link
+        connected, connecting = bool(reply.get("connected")), bool(reply.get("connecting"))
+        self.link_detail = {k: reply.get(k) for k in ("connected", "connecting", "playing")}
+        self.link = "connected" if connected else ("connecting" if connecting else "down")
+        return self.link
 
 
 def luna_connect(ws, n):
@@ -532,6 +848,18 @@ def validate_config():
         if not minimum <= value <= maximum:
             raise ValueError(f"{name} must be between {minimum} and {maximum}")
         values[name] = value
+    if os.environ.get("ROOT_MODE", ROOT_MODE) not in ("auto", "ssap", "root"):
+        raise ValueError("ROOT_MODE must be auto, ssap or root")
+    values["ROOT_MODE"] = os.environ.get("ROOT_MODE", ROOT_MODE)
+    values["ROOT_SSH_KEY"] = os.environ.get("ROOT_SSH_KEY", ROOT_SSH_KEY)
+    values["ROOT_KNOWN_HOSTS"] = os.environ.get("ROOT_KNOWN_HOSTS", ROOT_KNOWN_HOSTS)
+    try:
+        link_poll = float(os.environ.get("LINK_POLL", LINK_POLL))
+    except (TypeError, ValueError):
+        raise ValueError("LINK_POLL must be numeric") from None
+    if not 20 <= link_poll <= 600:
+        raise ValueError("LINK_POLL must be between 20 and 600 seconds")
+    values["LINK_POLL"] = link_poll
     keys = parse_keys(os.environ.get("MENU_KEYS", ",".join(MENU_KEYS)))
     if len(keys) > 32:
         raise ValueError("MENU_KEYS must contain at most 32 keys")
@@ -587,10 +915,31 @@ def last_attempt():
     return None
 
 
+def root_diagnose():
+    """Tri-etat root : ssh (probe bornee), luna, lien. Strictement lecteur et independant
+    du SSAP — consulte meme si le WS est tombe, precisement le cas ou le root sert."""
+    if ROOT_MODE == "ssap":
+        return {"mode": "ssap", "available": False}
+    probe = RootProbe(HOST, ROOT_SSH_KEY, ROOT_KNOWN_HOSTS)
+    info = {"mode": ROOT_MODE, "available": probe.probe(), "ssh": probe.reason}
+    if info["available"]:
+        try:
+            info["link"] = dict(state=probe.link_status(), **probe.link_detail)
+            info["luna"] = "ok"
+        except RootError as exc:
+            info["luna"] = exc.reason
+        try:
+            info["uptime"] = probe.uptime()
+        except RootError as exc:
+            info["uptime_error"] = exc.reason
+    return info
+
+
 def diagnose():
     result = {"reachable": reachable(), "paired": False, "paused": PAUSE_FILE.exists(),
               "evidence": "UNKNOWN", "identity": "unverified", "audio": "unverified",
-              "last_attempt": last_attempt()}
+              "last_attempt": last_attempt(), "watcher": load_state(),
+              "root": root_diagnose()}
     if not result["reachable"]:
         return result
     ws = None
@@ -625,29 +974,57 @@ def main():
         log(f"FATAL: key_invalid ({exc.__class__.__name__})")
         sys.exit(2)
 
+    probe = None
+    if ROOT_MODE != "ssap":
+        # Detection bornee (2 s) ; jamais d'exit : le projecteur coupe son Wi-Fi en veille, un
+        # demarrage sans SSH est normal. Re-evaluation a chaque allumage (root et auto).
+        probe = RootProbe(HOST, ROOT_SSH_KEY, ROOT_KNOWN_HOSTS)
+        if probe.probe():
+            log(f"root actif (uptime {probe.last_uptime:.0f} s) — lien A2DP lisible")
+        else:
+            log(f"root indisponible ({probe.reason}) — lectures SSAP seules, re-evaluation au prochain allumage")
+
     tracker = PowerTracker()
-    adopted = True      # projecteur deja allume au demarrage du service : jamais de touches
-    observed = False    # observation de demarrage faite (une seule fois, pas apres une reprise luna)
-    had_miss = False    # une sonde a rate depuis la derniere lecture de la sortie
-    last_bt = False     # derniere sortie lue = bt_* (permet de reperer un cycle plus court que OFF_AFTER)
+    recovery = Recovery()
     n = 0
-    handled = False     # traite pour cet allumage (connecte, choix manuel respecte ou abandon)
-    failed_rounds = 0
-    next_try = 0.0      # monotonic : pas de reprise avant cet instant
-    ws_down = False     # WS deja signale indisponible : on ne le relogue pas a chaque essai
-    drop_reads = 0      # lectures tv_speaker consecutives alors que la route BT etait active
-    drops = 0           # reconnexions apres perte de route pour cet allumage
+    saved = None
+    next_link_read = 0.0
+
+    def publish():  # state.json for --diagnose, rewritten only when the snapshot changes
+        nonlocal saved
+        state = recovery.snapshot(time.monotonic())
+        if state != saved:
+            save_state(state)
+            saved = state
 
     while True:
+        publish()
         event = tracker.update(reachable())
         if event == "off":
             log("projecteur eteint — surveillance du reseau...")
-            handled, failed_rounds, next_try, ws_down = False, 0, 0.0, False
+            recovery.power_off()
         elif event == "on":
-            log(f"projecteur detecte — warmup {WARMUP} s...")
-            adopted, had_miss, last_bt, drop_reads, drops = False, False, False, 0, 0
-            observed = True  # vrai allumage : plus d'observation de demarrage pour ce service
-            time.sleep(WARMUP)
+            warm = WARMUP
+            if probe is not None and probe.available:
+                # Etape 2 : l'uptime tranche blip vs reboot. Reference = dernier echantillon
+                # d'avant la coupure ; uptime qui continue = meme boot, pas de WARMUP.
+                try:
+                    previous, current = probe.last_uptime, probe.uptime()
+                except RootError as exc:
+                    probe.available, probe.reason = False, exc.reason
+                    log(f"root perdu ({exc.reason}) — re-evaluation au prochain allumage")
+                    log(f"projecteur detecte — warmup {WARMUP} s...")
+                else:
+                    if previous is not None and current >= previous:
+                        warm = 0.0
+                        log(f"uptime continu ({current:.0f} s) — coupure reseau sans reboot, warmup saute")
+                    else:
+                        log(f"projecteur detecte — warmup {WARMUP} s (uptime {current:.0f} s)")
+            else:
+                log(f"projecteur detecte — warmup {WARMUP} s...")
+            recovery.power_on()
+            publish()
+            time.sleep(warm)
         if PAUSE_FILE.exists():
             time.sleep(POLL)
             continue
@@ -655,10 +1032,10 @@ def main():
             time.sleep(SCAN)
             continue
         if tracker.misses:  # sonde ratee mais pas encore "eteint" : coupure breve, on ne touche a rien
-            had_miss = True
+            recovery.probe_missed()
             time.sleep(BLIP_POLL)
             continue
-        if not handled and time.monotonic() < next_try:
+        if recovery.waiting(time.monotonic()):
             time.sleep(POLL)
             continue
 
@@ -669,14 +1046,21 @@ def main():
             register(ws, ck)
         except Exception as e:
             close(ws)
-            if not ws_down:
+            if recovery.session_failed():
                 log(f"WS indisponible ({e.__class__.__name__}) — nouvelles tentatives toutes les {SCAN}s")
-                ws_down = True
+            if probe is not None and probe.available and time.monotonic() >= next_link_read:
+                # Le root garde la visibilite pendant une panne SSAP : lecture seule, aucune
+                # action possible sans session (popup, route, ecriture restent SSAP).
+                next_link_read = time.monotonic() + LINK_POLL
+                try:
+                    recovery.link = probe.link_status()
+                    log(f"WS tombe — lien A2DP (root): {recovery.link}")
+                except RootError as exc:
+                    probe.available, probe.reason = False, exc.reason
             time.sleep(SCAN)
             continue
-        if ws_down:
+        if recovery.session_restored():
             log("WS retabli")
-            ws_down = False
 
         n += 1
         try:
@@ -687,63 +1071,21 @@ def main():
             time.sleep(SCAN)
             continue
 
-        kind = classify_output(out)
-        is_bt = kind == "TARGET"
-        if adopted and not observed:
-            log(f"observation au demarrage: {kind}; identite BT non verifiee")
-            handled, observed = True, True
-        if handled:
-            if AUTO_RECOVER_BLIPS and had_miss and last_bt and kind == "DEFAULT_FALLBACK":
-                # BT actif avant la coupure, autre sortie au retour : cela peut etre un redemarrage
-                # plus court que OFF_AFTER. On reconnecte par luna seul, sans navigation dans les menus.
-                log("sortie BT perdue apres une coupure — reconnexion (luna seul)")
-                handled, failed_rounds, next_try, adopted = False, 0, 0.0, True
-            elif AUTO_RECOVER_DROPS and not had_miss and last_bt and kind == "DEFAULT_FALLBACK":
-                # Projecteur reste allume, Sonos decrochee : on confirme puis on reconnecte (luna seul).
-                drop_reads += 1
-                if drop_reads < DROP_CONFIRM_READS:
-                    close(ws)
-                    time.sleep(POLL)
-                    continue
-                drop_reads = 0
-                if drops >= MAX_DROP_RECOVERIES:
-                    log(f"route BT perdue {drops + 1} fois depuis l'allumage — sortie laissee telle quelle")
-                    last_bt = False
-                    close(ws)
-                    time.sleep(POLL)
-                    continue
-                drops += 1
-                log("route BT perdue projecteur allume — reconnexion (luna seul)")
-                handled, failed_rounds, next_try, adopted = False, 0, 0.0, True
+        if recovery.on_reading(out):
+            result, n = connect_round(ws, n, recovery.methods())
+            recovery.on_round(result, time.monotonic())
+        elif (probe is not None and probe.available and recovery.phase is Phase.WATCH
+              and classify_output(out) == "TARGET" and time.monotonic() >= next_link_read):
+            # Cadence bornee : lecture du lien uniquement route cible + phase stable, toutes
+            # les LINK_POLL secondes (pas un ssh par tour de boucle).
+            next_link_read = time.monotonic() + LINK_POLL
+            try:
+                state = probe.link_status()
+            except RootError as exc:
+                probe.available, probe.reason = False, exc.reason
+                log(f"lecture lien root impossible ({exc.reason}) — re-evaluation au prochain allumage")
             else:
-                drop_reads = 0
-                last_bt, had_miss = is_bt, False
-                close(ws)
-                time.sleep(POLL)
-                continue
-        had_miss = False
-        if is_bt:
-            log("route BT cible selectionnee; identite non verifiee")
-            handled, last_bt = True, True
-        elif kind != "DEFAULT_FALLBACK":
-            log(f"sortie changee a la main ({out}) — reprises annulees")
-            handled = True
-        else:
-            log(f"sortie actuelle {out} -> connexion Sonos...")
-            result, n = connect_round(ws, n, methods_for(failed_rounds, adopted))
-            if result.route_stable:
-                handled, last_bt = True, True
-            elif result.reason == "other_or_unknown_output":
-                handled = True
-            else:
-                failed_rounds += 1
-                delay = retry_delay(failed_rounds)
-                if delay is None:
-                    log("echec definitif — Sonos eteinte ou hors de portee ? (reessai au prochain allumage)")
-                    handled, last_bt = True, False
-                else:
-                    log(f"echec — reprise (luna seul) dans {fmt_delay(delay)}")
-                    next_try = time.monotonic() + delay
+                recovery.on_link(state)
         close(ws)
         time.sleep(POLL)
 

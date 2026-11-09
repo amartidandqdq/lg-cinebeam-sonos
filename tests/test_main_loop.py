@@ -64,6 +64,7 @@ def sim(watcher, monkeypatch, tmp_path):
     monkeypatch.setattr(watcher, "AUTO_RECOVER_BLIPS", False)
     monkeypatch.setattr(watcher, "MENU_FALLBACK", True)
     monkeypatch.setattr(watcher, "MENU_PROFILE", "hu710qke-webos24")
+    monkeypatch.setattr(watcher, "ROOT_MODE", "ssap")  # hermetic: no SSH attempt in loop tests
 
     def run():
         if st["start_cycle"]:
