@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — 2026-11-09
+- Fix (user-reported): the connect popup does not dismiss by itself — the root path now runs
+  the same popup confirmation as the SSAP path (extracted as `confirm_popup()`, shared by
+  both). Validated live: root reconnect with automatic popup detection and ENTER, link +
+  route + audio restored.
+
 ## 0.5.0 — 2026-11-09
 - Step 3 landed: in root mode the recovery connects with a direct `a2dp/connect` (the alert
   hack stays as the SSAP fallback in the method ladder) and writes the route with

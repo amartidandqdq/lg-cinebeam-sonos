@@ -115,13 +115,14 @@ def methods_for(failed_rounds, adopted, root_ok=False):
 
 def root_connect(probe, ws, n):
     """Etape 3 en root : connect direct + route par luna (valide a la main le 2026-11-09 :
-    lien en ~3 s sans popup bloquant, route basculee par setSystemSettings desaccessible
-    sans root). Le popup SSAP n'est pas joue sur ce chemin ; si la route refuse de suivre,
-    le round enchainera avec la methode SSAP suivante (alerte + popup)."""
+    lien en ~3 s, route basculee par setSystemSettings inaccessible sans root). Le connect
+    fait apparaitre le popup '<Sonos> wants to connect' qui ne disparait pas sans action :
+    confirmation par ENTER, meme chemin que le repli SSAP."""
     probe.connect_bt()
     time.sleep(2)
     if sound_output(ws, n) != TARGET:
         probe.set_route()
+    confirm_popup(ws, n)
 
 
 def fmt_delay(seconds):
@@ -709,29 +710,23 @@ def spawn_q1_capture(state):
     return capture
 
 
-def luna_connect(ws, n):
-    """Connexion A2DP directe, invisible a l'ecran (astuce lgtv-control-mcp :
-    un luna:// place dans le onclose d'une alerte s'execute quand on la ferme)."""
-    uri = "luna://com.webos.service.bluetooth2/a2dp/connect"
-    params = {"address": SONOS_BT}
-    alert = json.loads(call(ws, n, "ssap://system.notifications/createAlert", {
-        "message": " ", "buttons": [{"label": "", "onClick": uri, "params": params}],
-        "onclose": {"uri": uri, "params": params}, "onfail": {"uri": uri, "params": params}}))
-    call(ws, n + 1, "ssap://system.notifications/closeAlert", {"alertId": alert["payload"]["alertId"]})
-    # La Sonos repond par une demande que le projecteur affiche en popup Yes/No (focus sur Yes).
-    # Sans validation le son reste sur le projecteur : on detecte le popup et on appuie sur OK.
+def confirm_popup(ws, n):
+    """Le connect fait apparaitre un popup '<Sonos> wants to connect' (focus sur Yes) qui ne
+    disparait pas sans action (constat utilisateur 2026-11-09) : le detecter et le confirmer
+    par ENTER, que le connect vienne du chemin root ou de l'alerte SSAP. La route doit etre
+    cible ou repli : toute autre sortie est respectee, on ne confirme pas a l'aveugle."""
     for k in range(8):
         time.sleep(2)
         if PAUSE_FILE.exists() or classify_output(sound_output(ws, n + 40 + k)) not in ("TARGET", "DEFAULT_FALLBACK"):
-            return
+            return False
         state = popup_state(ws, n + 10 + k)
         if state == "UNKNOWN":
-            log("method=luna reason=screenshot_unavailable")
+            log("  raison=screenshot_unavailable")
         if state == "YES_FOCUSED":
             # Capturing the screen can take seconds: recheck immediately before confirmation.
             if (PAUSE_FILE.exists()
                     or classify_output(sound_output(ws, n + 50 + k)) not in ("TARGET", "DEFAULT_FALLBACK")):
-                return
+                return False
             log("  popup de connexion detecte -> Yes")
             try:
                 press(ws, n + 30 + k, "ENTER")
@@ -741,7 +736,19 @@ def luna_connect(ws, n):
                 log(f"  appui Yes impossible ({exc.__class__.__name__}) — nouvel essai")
                 continue
             time.sleep(3)
-            break
+            return True
+    return False
+
+
+def luna_connect(ws, n):
+    """Connexion A2DP par l'alerte SSAP (repli sans root), invisible a l'ecran."""
+    uri = "luna://com.webos.service.bluetooth2/a2dp/connect"
+    params = {"address": SONOS_BT}
+    alert = json.loads(call(ws, n, "ssap://system.notifications/createAlert", {
+        "message": " ", "buttons": [{"label": "", "onClick": uri, "params": params}],
+        "onclose": {"uri": uri, "params": params}, "onfail": {"uri": uri, "params": params}}))
+    call(ws, n + 1, "ssap://system.notifications/closeAlert", {"alertId": alert["payload"]["alertId"]})
+    confirm_popup(ws, n)
     if PAUSE_FILE.exists():
         return
     out = sound_output(ws, n + 3)

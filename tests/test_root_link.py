@@ -500,16 +500,43 @@ def test_connect_bt_treats_131_as_noop_and_other_as_error(probe, watcher, monkey
                 probe.connect_bt()
 
 
-def test_root_connect_writes_route_only_when_needed(probe, watcher, monkeypatch):
+def test_root_connect_writes_route_only_when_needed(probe, watcher, monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(probe, "connect_bt", lambda: calls.append("connect"))
     monkeypatch.setattr(probe, "set_route", lambda: calls.append("route"))
+    monkeypatch.setattr(watcher, "confirm_popup", lambda ws, n: calls.append("popup"))
+    monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
     monkeypatch.setattr(watcher, "sound_output", lambda ws, n: "tv_speaker")
     watcher.root_connect(probe, None, 1)
-    assert calls == ["connect", "route"]
+    assert calls == ["connect", "route", "popup"]
     monkeypatch.setattr(watcher, "sound_output", lambda ws, n: "bt_soundbar")
     watcher.root_connect(probe, None, 1)
-    assert calls == ["connect", "route", "connect"]  # route already on target: no write
+    assert calls == ["connect", "route", "popup", "connect", "popup"]  # route already on target
+
+
+def test_confirm_popup_presses_yes_when_focused(watcher, monkeypatch, tmp_path):
+    monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
+    monkeypatch.setattr(watcher, "PAUSE_FILE", tmp_path / "paused")
+    monkeypatch.setattr(watcher, "sound_output", lambda ws, n: "bt_soundbar")
+    monkeypatch.setattr(watcher, "popup_state", lambda ws, n: "YES_FOCUSED")
+    pressed = []
+    monkeypatch.setattr(watcher, "press", lambda ws, n, key: pressed.append(key))
+    monkeypatch.setattr(watcher.time, "sleep", lambda s: None)
+    assert watcher.confirm_popup(None, 1) is True
+    assert pressed == ["ENTER"]
+    assert "popup de connexion detecte" in watcher.LOG_FILE.read_text()
+
+
+def test_confirm_popup_absent_means_no_press(watcher, monkeypatch, tmp_path):
+    monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
+    monkeypatch.setattr(watcher, "PAUSE_FILE", tmp_path / "paused")
+    monkeypatch.setattr(watcher, "sound_output", lambda ws, n: "bt_soundbar")
+    monkeypatch.setattr(watcher, "popup_state", lambda ws, n: "ABSENT")
+    pressed = []
+    monkeypatch.setattr(watcher, "press", lambda ws, n, key: pressed.append(key))
+    monkeypatch.setattr(watcher.time, "sleep", lambda s: None)
+    assert watcher.confirm_popup(None, 1) is False
+    assert pressed == []
 
 
 def test_connect_round_dispatches_root_method(watcher, monkeypatch, tmp_path):
