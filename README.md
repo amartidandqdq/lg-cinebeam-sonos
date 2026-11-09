@@ -5,20 +5,20 @@
 ![Python 3.11–3.13](https://img.shields.io/badge/Python-3.11–3.13-blue)
 ![MIT](https://img.shields.io/badge/license-MIT-green)
 
-A small local Python service reconnects a paired Sonos after the projector returns from a detected off/on cycle. No root on the projector, cloud service, Docker, MQTT or Home Assistant is required.
+A small local Python service reconnects a paired Sonos after the projector returns from a detected off/on cycle. No cloud service, Docker, MQTT or Home Assistant is required. It runs in **two versions over the same code**: without root (SSAP only, the historical path) and — when SSH root access to the projector is available — a root version that reads the real A2DP link, connects directly, writes the audio route over Luna and captures the HCI evidence of every incident. Each version degrades to the other automatically; the full SSAP path is always kept as the fallback.
 
-**Compatibility measured historically:** LG HU710QKE / webOS 24 and Sonos Arc Ultra. The deployed v0.2.2 completed one recorded power-cycle test with automatic popup acceptance and human-confirmed Sonos audio on 2026-10-26. **The 0.3.0 release candidate was deployed as a candidate on 2026-10-28 (first observed automatic recovery, validation campaign in progress); no stable release is claimed.** See [validation records](docs/validation.md).
+**Compatibility measured historically:** LG HU710QKE / webOS 24 and Sonos Arc Ultra. The deployed v0.2.2 completed one recorded power-cycle test with automatic popup acceptance and human-confirmed Sonos audio on 2026-10-26. See [validation records](docs/validation.md).
 
 ## Behavior
 
 1. Observe at service startup. Starting/restarting the service on an already-running projector changes no audio settings.
 2. Require four failed probes before an off/on transition. This is a network heuristic, not proof of electrical power state.
 3. Wait the configured warmup. Only the default `tv_speaker` output is eligible for automatic recovery; other outputs are preserved from the first reading.
-4. Request A2DP via the existing Luna alert-close technique. Confirm the popup only if the known focused-Yes visual signature matches. No blind ENTER.
-5. Require three exact `bt_soundbar` readings spanning at least ten seconds. Report `BT_ROUTE_STABLE`; device identity, A2DP link and audible sound remain unverified.
-6. Retry failed rounds after 15 s, then 2, 10 and 30 minutes, Luna only; then stop until the next detected cycle. Recheck the output before each method.
+4. Request A2DP. In root mode: a direct `a2dp/connect` over SSH (the popup it raises is detected and confirmed by ENTER — it never dismisses by itself). Without root: the Luna alert-close technique. Confirm the popup only if the known focused-Yes visual signature matches. No blind ENTER.
+5. Require three exact `bt_soundbar` readings spanning at least ten seconds. Report `BT_ROUTE_STABLE`; device identity, A2DP link and audible sound remain unverified. In root mode the real A2DP link state is read separately and published in `state.json`.
+6. Retry failed rounds after 15 s, then 2, 10 and 30 minutes, root first then Luna; then stop until the next detected cycle. Recheck the output before each method.
 
-The Luna technique comes from [lgtv-control-mcp](https://github.com/brunofgmag/lgtv-control-mcp): closing an alert triggers its internal `luna://com.webos.service.bluetooth2/a2dp/connect` URI. That protocol is preserved.
+The Luna alert-close technique comes from [lgtv-control-mcp](https://github.com/brunofgmag/lgtv-control-mcp): closing an alert triggers its internal `luna://com.webos.service.bluetooth2/a2dp/connect` URI. It is preserved as the non-root path and as the fallback when the root transport is unavailable.
 
 ### Choices and ambiguity
 
@@ -61,7 +61,7 @@ Edit `~/sonos-watcher/watcher.env` before pairing or starting. Set the real addr
 | `MENU_PROFILE` | unset | Must be `hu710qke-webos24` when menu fallback enabled |
 | `MENU_KEYS` | measured layout | Comma-separated UP/DOWN/LEFT/RIGHT/ENTER/EXIT/BACK/HOME |
 | `ROOT_MODE` | `auto` | `auto` probes root at startup and each power-on and degrades silently to SSAP; `ssap` never uses SSH; `root` is the same as `auto` and expects the key to exist |
-| `ROOT_SSH_KEY` | `~/.ssh/id_ed25519` | Key for the root transport (read-only: link status and uptime) |
+| `ROOT_SSH_KEY` | `~/.ssh/id_ed25519` | Key for the root transport (link status, uptime, direct connect, route write, snoop re-arm) |
 | `ROOT_KNOWN_HOSTS` | `~/.ssh/known_hosts.cinebeam` | Host keys pinned on first connection; a key change is a hard error |
 | `LINK_POLL` | `60` | 20–600 seconds between A2DP link reads while the SSAP WebSocket is down (fallback cadence) |
 | `LINK_POLL_CALM` | `300` | 60–600 seconds between link reads while the link is stable |
@@ -69,21 +69,35 @@ Edit `~/sonos-watcher/watcher.env` before pairing or starting. Set the real addr
 
 Use `0` or `1` for boolean options. Invalid configuration exits with status 2; systemd does not restart that error in a loop.
 
-### Root transport (optional, read-only)
+### Root transport (optional) — the two versions
 
-With SSH root access to the projector, the watcher reads the real A2DP link state
-(`bluetooth2/a2dp/getStatus`: `connected`, `connecting`, `playing`) and `/proc/uptime`
-instead of inferring from `soundOutput` alone. `luna-send` on this firmware requires a
-PTY (`ssh -tt`) and returns rc=0 with no output otherwise; the transport treats that as
-a transport error, never as success. All root calls are read-only in this release —
-`connect`, popup and output writes stay SSAP.
+The service runs the same state machine in two versions, selected by `ROOT_MODE`:
 
-What it adds over SSAP-only:
+- **Non-root (`ssap`, or `auto`/`root` when SSH is unavailable):** the historical path. Link
+  state is inferred from `soundOutput`; the reconnect goes through the Luna alert-close
+  technique (a webOS behavior that is not documented by LG and could change with a firmware
+  update); the audio route is written through the SSAP adapter.
+- **Root (`root`, or `auto` when SSH works):** the same decisions, better evidence and
+  simpler actions. The real A2DP link state (`bluetooth2/a2dp/getStatus`: `connected`,
+  `connecting`, `playing`) and `/proc/uptime` are read over SSH; the reconnect is a direct
+  `a2dp/connect`; the route is written with `changeSoundOutput` over Luna root (the call
+  that is 401-refused without root); the popup raised by the connect is detected by
+  screenshot and confirmed with ENTER (it never dismisses by itself). No state persists on
+  the projector except host-key pinning on the m720q side.
+
+Transport notes that are easy to get wrong and are encoded here: `luna-send` on this
+firmware requires a PTY (`ssh -tt`) and returns rc=0 with no output otherwise — that is a
+transport error, never a success; under the unit's `PrivateTmp=true` the system SSH config
+must be skipped (`-F /dev/null`); 131 ("Already connected") is a no-op, never a success
+proof, and `connected` never proves routing — the round re-reads the route and writes it
+only when it is not on target.
+
+What root adds over SSAP-only:
 
 - **`bt_link_lost` visibility.** The failure where the route still claims the BT target
   while the A2DP link is down (measured 2026-11-09 19:52, invisible to `soundOutput`)
   is detected after two consecutive link reads, logged once per episode and published as
-  `"link"` in `state.json`. No recovery is attempted yet (planned step 3). The ambiguous
+  `"link"` in `state.json` next to `"transport": "root" | "ssap"`. The ambiguous
   `errorCode 106` is reported as `unavailable` and never triggers action: it can mean an
   adapter reset, an unpaired device or a changed address; `tools/q1_battery.py`
   discriminates when it appears.
@@ -91,10 +105,13 @@ What it adds over SSAP-only:
   kept) from a network blip (warmup skipped) — up to ~40 s saved on blips.
 - **`--diagnose` tri-state.** A `root` section reports `ssh` / `luna` / `link`
   independently of the SSAP layer, even while the WebSocket is down.
-- **Automatic Q1 evidence capture.** The 106 state is ephemeral (the link recovers by
-  itself), so on every link episode the watcher files a read-only discrimination battery
-  under `~/sonos-watcher/q1-captures/` (at most 5 per power-on). `tools/q1_battery.py`
-  runs the same battery on demand; `--repair` adds `a2dp/connect` plus a link re-read.
+- **Automatic Q1 evidence capture with HCI traces.** The 106 state is ephemeral (the link
+  recovers by itself), so on every link episode the watcher files a read-only
+  discrimination battery under `~/sonos-watcher/q1-captures/` (at most 5 per power-on)
+  and offloads the MTK snoop HCI trace next to it. The snoop is re-armed on every root
+  gain (`adapter/internal/setTrace`, native 2 MB rotation, RAM-only in `/tmp`, zero flash,
+  wiped at projector reboot). `tools/q1_battery.py` runs the same battery on demand;
+  `--repair` adds `a2dp/connect` plus a link re-read.
 - **Adaptive link polling.** Calm 300 s when the link is stable, hot 30 s for 15 minutes
   after any route or link transition (step 4 option (c): the polling cost drops without
   creating a single subscription).
@@ -133,12 +150,12 @@ WATCHER=~/sonos-watcher/sonos-watcher.py
 "$PY" "$WATCHER" --pause
 systemctl --user stop sonos-watcher
 "$PY" "$WATCHER" --resume
-"$PY" "$WATCHER" --reconnect-now  # Luna only, preserves other audio outputs
+"$PY" "$WATCHER" --reconnect-now  # root first when available, then Luna; preserves other audio outputs
 systemctl --user start sonos-watcher
 journalctl --user -u sonos-watcher --since today
 ```
 
-Diagnostics establish TCP reachability, authenticated SSAP, output route, last logged attempt and, under `watcher`, the running daemon's recovery phase (`STARTUP_OBSERVE`, `OFF`, `RECOVER`, `RETRY_WAIT` with `next_retry_at`, `WATCH`) with its reason, retry and drop counters; see [state machines](docs/state-machine.md). Phase changes are logged as `state=OLD->NEW reason=...`. `BT_ROUTE_SELECTED` is a single setting read; `BT_ROUTE_STABLE` is three readings. Neither means `BT_LINK_CONFIRMED` or `AUDIO_VERIFIED`. A human confirmed audio on the deployed old version, not permanently for every future connection. Sonos UPnP media state was seen reporting a stopped radio while Bluetooth sound was heard; it is not used as independent BT proof.
+Diagnostics establish TCP reachability, authenticated SSAP, output route, last logged attempt and, under `watcher`, the running daemon's recovery phase (`STARTUP_OBSERVE`, `OFF`, `RECOVER`, `RETRY_WAIT` with `next_retry_at`, `WATCH`) with its reason, retry and drop counters, plus `link` (the factual A2DP state read in root mode) and `transport` (`root` or `ssap`); under `root`, the `ssh`/`luna`/`link` tri-state is reported even while the WebSocket is down. See [state machines](docs/state-machine.md). Phase changes are logged as `state=OLD->NEW reason=...`. `BT_ROUTE_SELECTED` is a single setting read; `BT_ROUTE_STABLE` is three readings. Neither means `BT_LINK_CONFIRMED` or `AUDIO_VERIFIED`; the root-mode `link` field is the factual A2DP state but still says nothing about audible sound. Sonos UPnP media state was seen reporting a stopped radio while Bluetooth sound was heard; it is not used as independent BT proof.
 
 Log lines include attempt/method/evidence/reason. The local log rotates at roughly 1 MB with three backups; journald retention is controlled by the host. No screenshots are saved by the watcher. Legacy debug tools may capture content: use them locally and never publish private captures.
 

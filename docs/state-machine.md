@@ -42,10 +42,15 @@ stateDiagram-v2
 | `WATCH` | Settled for this power-on (connected, other output respected, retries exhausted). Only an opt-in blip or drop recovery reopens it. | `blip_lost_bt`, `bt_route_dropped`, `power_off` |
 
 Data carried across phases: `luna_only` (no menu keys; false only between a real power-on and
-the next blip/drop recovery), `failed_rounds`/`next_try` (retry ladder), `had_miss` (a probe
-missed since the last read), `last_bt` (last read was the target route), `drop_reads`/`drops`
-(drop confirmation and per-power-on cap), `link_down` (WebSocket outage logged once).
-`reason=drop_cap_reached` in `WATCH` means the drop cap stopped recovery until the next power-on.
+the next blip/drop recovery), `root_ok` (root transport available; places `root` first in the
+method ladder), `failed_rounds`/`next_try` (retry ladder), `had_miss` (a probe missed since the
+last read), `last_bt` (last read was the target route), `drop_reads`/`drops` (drop confirmation
+and per-power-on cap), `link_down` (WebSocket outage logged once), `link`/`link_reads`/
+`link_flag`/`link_episodes` (root link state, `bt_link_lost` confirmation and episode bookkeeping)
+and `q1_captures` (per-power-on evidence-capture cap).
+`reason=drop_cap_reached` in `WATCH` means the drop cap stopped recovery until the next power-on;
+`reason=bt_link_lost` means a root-confirmed dead link with the route still on target, and
+`reason=link_restored` its recovery.
 
 Pause is orthogonal: the pause file stops the loop before any session; the phase is kept as is.
 
@@ -65,8 +70,35 @@ clarifying behavior.
 | Where | States | Notes |
 |---|---|---|
 | `PowerTracker` | online ↔ offline, with a miss counter | Hysteresis: `off` after `OFF_AFTER` consecutive misses, `on` on the first success. Emits the events `Recovery` consumes. |
-| `connect_round` | method ladder `luna, luna[, menu]` → observe → stop/next | Ends on stable route, other output, timeout or a failed command (session never reused). |
+| `connect_round` | method ladder `root, luna[, luna][, menu]` (root only when the transport is up) → observe → stop/next | Ends on stable route, other output, timeout or a failed command (session never reused). `root_connect` = direct `a2dp/connect` → route re-read → `changeSoundOutput` over Luna root only if the route is not on target. |
 | `observe_route` | 3 samples → `BT_ROUTE_STABLE` / `FAILED` / `UNKNOWN` | Evidence levels are in `RouteResult`. |
-| `luna_connect` | alert → poll popup (≤ 8) → Yes → verify → optional output write | Rechecks pause and output before every mutation. |
+| `luna_connect` | alert → `confirm_popup` → verify → optional output write | Non-root path (and root fallback). Rechecks pause and output before every mutation. |
+| `confirm_popup` | poll popup (≤ 8 × 2 s) → Yes or give up | Shared by the root and SSAP paths: the connect popup never dismisses by itself (user-reported 2026-11-09). Any output other than target/fallback aborts the confirmation. |
 | `popup_state` | `YES_FOCUSED` / `ABSENT` / `UNKNOWN` | Returned enum; `UNKNOWN` never sends a key. |
 | Pause file | active ↔ paused | Controlled by `--pause` / `--resume`, read on each loop and before each mutation. |
+
+## Root link machine (root mode only, since 0.4.0)
+
+When `ROOT_MODE` selects the root transport and the SSH probe succeeds, the loop also reads
+the **real A2DP link** (`a2dp/getStatus`) on an adaptive cadence and feeds `Recovery.on_link()`:
+
+- **Cadence:** hot (`LINK_POLL_HOT`, 30 s) for `LINK_HOT_WINDOW` (15 min) after any route or
+  link transition, on WebSocket restore, and after the route settles; calm (`LINK_POLL_CALM`,
+  300 s) when stable. The WebSocket-down branch keeps `LINK_POLL` (60 s). Link reads only run
+  in `WATCH` with the target route.
+- **States:** `connected` / `connecting` / `down` / `unavailable` (errorCode 106 — ambiguous:
+  adapter reset, unpair or changed address; never triggers action, discriminated by
+  `tools/q1_battery.py`) / `unknown`.
+- **`down` confirmed twice** with the route on target → `reason=bt_link_lost` in `WATCH`
+  (visibility and Q1 evidence capture; the recovery itself follows the route signal through
+  `bt_route_dropped`, which is faster in a normal drop since the route falls back at once).
+- **Capture cap:** one Q1 battery per episode, at most `Q1_MAX_CAPTURES` (5) per power-on,
+  filed under `~/sonos-watcher/q1-captures/` with the MTK snoop HCI trace offloaded next to it.
+- **Probe lifecycle:** re-probed at startup and at every power-on (plus a second chance after
+  the warmup — sshd can be slow at boot); a failure degrades to the SSAP-only version and is
+  retried at the next power-on, never fatally.
+- **Snoop:** re-armed on every root gain (`/tmp` is tmpfs and is wiped at projector reboot);
+  native 2 MB rotation, RAM-only.
+
+`state.json` carries `link` (the last root link state) and `transport` (`root` or `ssap`) so
+`--diagnose` always shows which version produced the information.
