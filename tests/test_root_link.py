@@ -411,3 +411,55 @@ def test_luna_bad_json_redacts_key_material(probe, watcher, monkeypatch):
         probe.luna("luna://x", {"address": "aa"})
     assert "linkKey" not in str(exc.value)
     assert "redacted" in str(exc.value)
+
+
+# --- adaptive polling (step 4 option c): calm 300 s when stable, hot 30 s on transitions ---
+
+def _link_reads(sim, watcher, monkeypatch, states, limit=4000.0):  # noqa: F811
+    reads = []
+
+    class SeqProbe(FakeProbe):
+        def __init__(self):
+            super().__init__(500.0)
+            self.n = 0
+
+        def link_status(self):
+            state = states[min(self.n, len(states) - 1)]
+            self.n += 1
+            self.link_detail = {}
+            reads.append(state)
+            return state
+
+    p = SeqProbe()
+    monkeypatch.setattr(watcher, "ROOT_MODE", "auto")
+    monkeypatch.setattr(watcher, "RootProbe", lambda *a: p)
+    monkeypatch.setattr(watcher, "spawn_q1_capture", lambda *a: None)
+    monkeypatch.setattr(watcher, "LINK_POLL_CALM", 300.0)
+    monkeypatch.setattr(watcher, "LINK_POLL_HOT", 30.0)
+    sim["limit"] = limit
+    sim["start_cycle"] = False
+    # off/on cycle: without it the watcher observes tv_speaker and never reaches the
+    # TARGET route, which is the only state where link reads happen.
+    sim["script"] = [False] * 4 + [True]
+    sim["run"]()
+    return len(reads)
+
+
+def test_calm_regime_polls_slowly_when_stable(sim, watcher, monkeypatch):  # noqa: F811
+    reads = _link_reads(sim, watcher, monkeypatch, ["connected"])
+    # 900 s hot (30 s) after the route settles, then 300 s calm: ~41 reads over 4000 s
+    assert reads < 60
+
+
+def test_hot_regime_polls_fast_while_transitions_continue(sim, watcher, monkeypatch):  # noqa: F811
+    reads = _link_reads(sim, watcher, monkeypatch, ["down", "connected"] * 60)
+    # every read is a transition, the hot regime never expires: ~30 s cadence over 4000 s
+    assert reads > 100
+
+
+def test_validate_config_rejects_hot_above_calm(watcher, monkeypatch):
+    monkeypatch.setattr(watcher, "ALLOW_INSECURE_TLS", True)
+    monkeypatch.setattr(watcher, "SONOS_BT", "12:34:56:78:9a:bc")
+    monkeypatch.setenv("LINK_POLL_HOT", "500")  # above the 300 s calm cadence
+    with pytest.raises(ValueError, match="LINK_POLL_HOT"):
+        watcher.validate_config()

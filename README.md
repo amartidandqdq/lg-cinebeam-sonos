@@ -63,7 +63,9 @@ Edit `~/sonos-watcher/watcher.env` before pairing or starting. Set the real addr
 | `ROOT_MODE` | `auto` | `auto` probes root at startup and each power-on and degrades silently to SSAP; `ssap` never uses SSH; `root` is the same as `auto` and expects the key to exist |
 | `ROOT_SSH_KEY` | `~/.ssh/id_ed25519` | Key for the root transport (read-only: link status and uptime) |
 | `ROOT_KNOWN_HOSTS` | `~/.ssh/known_hosts.cinebeam` | Host keys pinned on first connection; a key change is a hard error |
-| `LINK_POLL` | `60` | 20–600 seconds between A2DP link reads while the BT route is selected |
+| `LINK_POLL` | `60` | 20–600 seconds between A2DP link reads while the SSAP WebSocket is down (fallback cadence) |
+| `LINK_POLL_CALM` | `300` | 60–600 seconds between link reads while the link is stable |
+| `LINK_POLL_HOT` | `30` | 20–120 seconds during the 15 minutes following any route or link transition |
 
 Use `0` or `1` for boolean options. Invalid configuration exits with status 2; systemd does not restart that error in a loop.
 
@@ -93,6 +95,9 @@ What it adds over SSAP-only:
   itself), so on every link episode the watcher files a read-only discrimination battery
   under `~/sonos-watcher/q1-captures/` (at most 5 per power-on). `tools/q1_battery.py`
   runs the same battery on demand; `--repair` adds `a2dp/connect` plus a link re-read.
+- **Adaptive link polling.** Calm 300 s when the link is stable, hot 30 s for 15 minutes
+  after any route or link transition (step 4 option (c): the polling cost drops without
+  creating a single subscription).
 
 ### Pair and start
 

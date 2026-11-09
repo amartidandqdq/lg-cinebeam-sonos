@@ -55,7 +55,10 @@ MAX_DROP_RECOVERIES = 5  # par allumage : au-dela, on laisse la sortie telle que
 ROOT_MODE = os.environ.get("ROOT_MODE", "auto")  # auto|ssap|root : lecture du lien A2DP par SSH root
 ROOT_SSH_KEY = os.environ.get("ROOT_SSH_KEY", str(pathlib.Path.home() / ".ssh" / "id_ed25519"))
 ROOT_KNOWN_HOSTS = os.environ.get("ROOT_KNOWN_HOSTS", str(pathlib.Path.home() / ".ssh" / "known_hosts.cinebeam"))
-LINK_POLL = float(os.environ.get("LINK_POLL", 60))  # s entre deux lectures du lien quand la route est cible
+LINK_POLL = float(os.environ.get("LINK_POLL", 60))  # s entre deux lectures du lien : WS tombe + repli
+LINK_POLL_CALM = float(os.environ.get("LINK_POLL_CALM", 300))  # s, regime calme : lien stable
+LINK_POLL_HOT = float(os.environ.get("LINK_POLL_HOT", 30))     # s, regime chaud apres une transition
+LINK_HOT_WINDOW = 900.0  # s de regime chaud apres une transition de route ou de lien
 LINK_CONFIRM_READS = 2  # lectures lien non connecte consecutives avant de declarer bt_link_lost
 Q1_MAX_CAPTURES = 5     # captures Q1 par allumage : un episode = une capture, pas plus
 
@@ -945,6 +948,19 @@ def validate_config():
     if not 20 <= link_poll <= 600:
         raise ValueError("LINK_POLL must be between 20 and 600 seconds")
     values["LINK_POLL"] = link_poll
+    try:
+        link_poll_calm = float(os.environ.get("LINK_POLL_CALM", LINK_POLL_CALM))
+        link_poll_hot = float(os.environ.get("LINK_POLL_HOT", LINK_POLL_HOT))
+    except (TypeError, ValueError):
+        raise ValueError("LINK_POLL_CALM and LINK_POLL_HOT must be numeric") from None
+    if not 60 <= link_poll_calm <= 600:
+        raise ValueError("LINK_POLL_CALM must be between 60 and 600 seconds")
+    if not 20 <= link_poll_hot <= 120:
+        raise ValueError("LINK_POLL_HOT must be between 20 and 120 seconds")
+    if link_poll_hot > link_poll_calm:
+        raise ValueError("LINK_POLL_HOT must not exceed LINK_POLL_CALM")
+    values["LINK_POLL_CALM"] = link_poll_calm
+    values["LINK_POLL_HOT"] = link_poll_hot
     keys = parse_keys(os.environ.get("MENU_KEYS", ",".join(MENU_KEYS)))
     if len(keys) > 32:
         raise ValueError("MENU_KEYS must contain at most 32 keys")
@@ -1075,6 +1091,8 @@ def main():
     n = 0
     saved = None
     next_link_read = 0.0
+    hot_until = 0.0        # regime chaud (LINK_POLL_HOT) jusqu'a cet instant, puis calme
+    last_route_kind = None
 
     def publish():  # state.json for --diagnose, rewritten only when the snapshot changes
         nonlocal saved
@@ -1162,6 +1180,8 @@ def main():
             continue
         if recovery.session_restored():
             log("WS retabli")
+            hot_until = time.monotonic() + LINK_HOT_WINDOW
+            next_link_read = time.monotonic()
 
         n += 1
         try:
@@ -1172,14 +1192,20 @@ def main():
             time.sleep(SCAN)
             continue
 
+        route_kind = classify_output(out)
+        if route_kind != last_route_kind:
+            # Transition de route (retour du BT cible, changement manuel...) : regime chaud.
+            hot_until = time.monotonic() + LINK_HOT_WINDOW
+            last_route_kind = route_kind
         if recovery.on_reading(out):
             result, n = connect_round(ws, n, recovery.methods())
             recovery.on_round(result, time.monotonic())
         elif (probe is not None and probe.available and recovery.phase is Phase.WATCH
-              and classify_output(out) == "TARGET" and time.monotonic() >= next_link_read):
-            # Cadence bornee : lecture du lien uniquement route cible + phase stable, toutes
-            # les LINK_POLL secondes (pas un ssh par tour de boucle).
-            next_link_read = time.monotonic() + LINK_POLL
+              and route_kind == "TARGET" and time.monotonic() >= next_link_read):
+            # Cadence adaptee : chaud (30 s) pendant LINK_HOT_WINDOW apres une transition,
+            # calme (300 s) quand le lien est stable — et jamais un ssh par tour de boucle.
+            next_link_read = time.monotonic() + (LINK_POLL_HOT if time.monotonic() < hot_until
+                                                 else LINK_POLL_CALM)
             try:
                 state = probe.link_status()
             except RootError as exc:
@@ -1188,7 +1214,10 @@ def main():
                 log(f"lecture lien root impossible ({exc}) — re-evaluation au prochain allumage")
             else:
                 was_flagged = recovery.link_flag
+                previous_link = recovery.link
                 recovery.on_link(state)
+                if state != previous_link:
+                    hot_until = time.monotonic() + LINK_HOT_WINDOW
                 if (recovery.link_flag and not was_flagged and state in ("down", "unavailable")
                         and recovery.q1_captures < Q1_MAX_CAPTURES):
                     # L'etat 106/down est ephemere (le lien se retablit seul) : la batterie Q1

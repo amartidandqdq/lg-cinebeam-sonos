@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2 — 2026-11-09
+- Adaptive link polling (step 4 option (c), designed by the GLM-5.3-flash-max review round):
+  calm 300 s when the link is stable, hot 30 s during the 15 minutes following any route or
+  link transition, WS-down fallback cadence unchanged. Cuts the steady-state SSH cost by ~5x
+  without creating a single subscription; persistent subscriptions stay rejected pending the
+  V1-V3 protocol.
+- New env: `LINK_POLL_CALM` (60-600), `LINK_POLL_HOT` (20-120, must not exceed calm).
+
 ## 0.4.1 — 2026-11-09
 - Fix (found by a GLM-5.3-flash-max review of the deployed 0.4.0): the root probe was never
   re-evaluated at power-on — a single failed probe (slow sshd at projector boot) disabled the
