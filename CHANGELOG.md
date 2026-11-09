@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.1 — 2026-11-09
+- Fix (found by a GLM-5.3-flash-max review of the deployed 0.4.0): the root probe was never
+  re-evaluated at power-on — a single failed probe (slow sshd at projector boot) disabled the
+  root transport for the whole process lifetime, contradicting the documented lifecycle. The
+  probe now re-runs at every power-on, with a second chance after the warmup.
+- Fix: the Q1 capture cap (≤5 per power-on) was bypassed by `unavailable` episodes; a flapping
+  106 could spawn unbounded captures. All episodes now share one dedicated counter.
+- Fix: `--q1-capture` failures ended in a raw traceback and a malformed `getLinkKey` reply
+  could leak key bytes into the error detail; `cli()` now catches `RootError` cleanly and
+  `bad_json` details containing key material are redacted.
+- Fix: the Q1 spawn is OSError-safe (a full disk logs and continues instead of crashing the
+  loop); Q1 spawn failures are visible in the log.
+- `state.json` publishes `transport: root|ssap`; `link_restored` reason after a recovered
+  episode; clearer log wording for non-106 link errors.
+
 ## 0.4.0 — 2026-11-09
 - Optional read-only root transport (`ROOT_MODE=auto|ssap|root`): the watcher reads the real
   A2DP link state (`bluetooth2/a2dp/getStatus`) and `/proc/uptime` over SSH instead of inferring

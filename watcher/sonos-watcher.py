@@ -145,6 +145,7 @@ class Recovery:
         self.link_reads = 0     # lectures lien non connecte consecutives (confirmation bt_link_lost)
         self.link_flag = False  # episode bt_link_lost en cours : log unique jusqu'au retablissement
         self.link_episodes = 0  # episodes bt_link_lost depuis l'allumage
+        self.q1_captures = 0    # captures Q1 lancees depuis l'allumage (plafond Q1_MAX_CAPTURES)
 
     def _enter(self, phase, reason):
         if phase is not self.phase:
@@ -160,6 +161,7 @@ class Recovery:
     def power_on(self):
         self.luna_only, self.had_miss, self.last_bt, self.drop_reads, self.drops = False, False, False, 0, 0
         self.link, self.link_reads, self.link_flag, self.link_episodes = "unknown", 0, False, 0
+        self.q1_captures = 0
         self._enter(Phase.RECOVER, "power_on")
 
     def probe_missed(self):
@@ -244,11 +246,17 @@ class Recovery:
             self.link_reads = 0
             if self.link_flag:
                 log("lien A2DP retabli")
+                self.reason = "link_restored"
                 self.link_flag = False
             return
-        if state != "down":
+        if state == "unavailable":
             if not self.link_flag or previous != state:
-                log(f"lien A2DP {state} — cas ambigu (106 ?), discrimination requise avant toute action")
+                log("lien A2DP unavailable (106) — cas ambigu, discrimination requise avant toute action")
+                self.link_flag = True
+            return
+        if state != "down":  # unknown : erreur autre que 106, pas discriminante
+            if not self.link_flag or previous != state:
+                log(f"lien A2DP illisible ({state}) — discrimination requise avant toute action")
                 self.link_flag = True
             return
         if not self.last_bt:
@@ -546,7 +554,8 @@ class RootProbe:
         try:
             reply = json.loads(line)
         except ValueError:
-            raise RootError("bad_json", line[:60]) from None
+            detail = "<redacted: reply contains key material>" if "key" in line.lower() else line[:60]
+            raise RootError("bad_json", detail) from None
         if not isinstance(reply, dict):
             raise RootError("bad_json", "not_an_object")
         return reply
@@ -629,6 +638,24 @@ def q1_verdict(replies):
         return "106 with adapter up and no link key: unpaired or address changed; 106 is permanent, re-pair"
     return ("106 with adapter up and link key present: link down but still paired; "
             "a2dp/connect is expected to repair (tools/q1_battery.py --repair)")
+
+
+def spawn_q1_capture(state):
+    """Batterie Q1 en lecture seule au moment exact de l'episode : l'etat 106/down est
+    ephemere (le lien se retablit seul), l'evidence doit etre capturee immediatement.
+    Tout echec (disque plein...) est logge, jamais laisse crasher la boucle."""
+    capture = LOG_FILE.parent / "q1-captures" / f"{datetime.now():%Y%m%d-%H%M%S}-{state}.json"
+    try:
+        capture.parent.mkdir(parents=True, exist_ok=True)
+        with open(capture.with_suffix(".err"), "w") as err:
+            subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()),
+                              "--q1-capture", str(capture)],
+                             stdout=subprocess.DEVNULL, stderr=err)
+    except OSError as exc:
+        log(f"capture Q1 impossible ({exc.__class__.__name__}) — episode non documente")
+        return None
+    log(f"episode lien {state} — capture Q1 (lecture seule) -> {capture.name}")
+    return capture
 
 
 def luna_connect(ws, n):
@@ -1052,6 +1079,8 @@ def main():
     def publish():  # state.json for --diagnose, rewritten only when the snapshot changes
         nonlocal saved
         state = recovery.snapshot(time.monotonic())
+        if probe is not None:
+            state["transport"] = "root" if probe.available else "ssap"
         if state != saved:
             save_state(state)
             saved = state
@@ -1064,27 +1093,37 @@ def main():
             recovery.power_off()
         elif event == "on":
             warm = WARMUP
-            if probe is not None and probe.available:
-                # Etape 2 : l'uptime tranche blip vs reboot. Reference = dernier echantillon
-                # d'avant la coupure ; uptime qui continue = meme boot, pas de WARMUP.
-                try:
-                    previous, current = probe.last_uptime, probe.uptime()
-                except RootError as exc:
-                    probe.available, probe.reason = False, exc.reason
-                    probe.reason_detail = str(exc)
-                    log(f"root perdu ({exc}) — re-evaluation au prochain allumage")
-                    log(f"projecteur detecte — warmup {WARMUP} s...")
-                else:
-                    if previous is not None and current >= previous:
-                        warm = 0.0
-                        log(f"uptime continu ({current:.0f} s) — coupure reseau sans reboot, warmup saute")
+            if probe is not None:
+                previous = probe.last_uptime  # reference d'avant la coupure, avant toute re-probe
+                if not probe.available:
+                    probe.probe()  # re-evaluation a chaque allumage (root et auto), jamais definitive
+                if probe.available:
+                    # Etape 2 : l'uptime tranche blip vs reboot ; uptime qui continue = meme boot.
+                    try:
+                        current = probe.uptime()
+                    except RootError as exc:
+                        probe.available, probe.reason = False, exc.reason
+                        probe.reason_detail = str(exc)
+                        log(f"root perdu ({exc}) — re-evaluation au prochain allumage")
+                        log(f"projecteur detecte — warmup {WARMUP} s...")
                     else:
-                        log(f"projecteur detecte — warmup {WARMUP} s (uptime {current:.0f} s)")
+                        if previous is not None and current >= previous:
+                            warm = 0.0
+                            log(f"uptime continu ({current:.0f} s) — coupure reseau sans reboot, warmup saute")
+                        else:
+                            log(f"projecteur detecte — warmup {WARMUP} s (uptime {current:.0f} s)")
+                else:
+                    log(f"root indisponible ({probe.reason_detail}) — lectures SSAP seules, "
+                        f"re-evaluation au prochain allumage")
+                    log(f"projecteur detecte — warmup {WARMUP} s...")
             else:
                 log(f"projecteur detecte — warmup {WARMUP} s...")
             recovery.power_on()
             publish()
             time.sleep(warm)
+            if probe is not None and not probe.available and warm and probe.probe():
+                # Seconde chance apres le warmup : sshd est parfois lent au boot du projecteur.
+                log(f"root actif apres warmup (uptime {probe.last_uptime:.0f} s) — lien A2DP lisible")
         if PAUSE_FILE.exists():
             time.sleep(POLL)
             continue
@@ -1151,16 +1190,12 @@ def main():
                 was_flagged = recovery.link_flag
                 recovery.on_link(state)
                 if (recovery.link_flag and not was_flagged and state in ("down", "unavailable")
-                        and recovery.link_episodes <= Q1_MAX_CAPTURES):
+                        and recovery.q1_captures < Q1_MAX_CAPTURES):
                     # L'etat 106/down est ephemere (le lien se retablit seul) : la batterie Q1
-                    # doit capturer l'evidence a l'instant exact de l'episode. Lecture seule.
-                    capture = LOG_FILE.parent / "q1-captures" / f"{datetime.now():%Y%m%d-%H%M%S}-{state}.json"
-                    capture.parent.mkdir(parents=True, exist_ok=True)
-                    with open(capture.with_suffix(".err"), "w") as err:
-                        subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()),
-                                          "--q1-capture", str(capture)],
-                                         stdout=subprocess.DEVNULL, stderr=err)
-                    log(f"episode lien {state} — capture Q1 (lecture seule) -> {capture.name}")
+                    # doit capturer l'evidence a l'instant exact de l'episode. Lecture seule,
+                    # plafonnee tous episodes confondus (down comme unavailable).
+                    recovery.q1_captures += 1
+                    spawn_q1_capture(state)
         close(ws)
         time.sleep(POLL)
 
@@ -1207,8 +1242,9 @@ def cli():
                 close(ws)
         main()
         return 0
-    except (OSError, ValueError, SessionError):
-        print("Configuration, key or session invalid; use --help and the operations guide.", file=sys.stderr)
+    except (OSError, ValueError, SessionError, RootError) as exc:
+        print(f"Configuration, key, session or root transport invalid ({exc.__class__.__name__}); "
+              "use --help and the operations guide.", file=sys.stderr)
         return 2
 
 

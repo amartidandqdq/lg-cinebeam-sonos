@@ -1,6 +1,7 @@
 """Root transport steps 1-2: luna reply contract, link states, bt_link_lost, warmup skip."""
 import json
 import subprocess
+import sys
 
 import pytest
 from test_main_loop import sim  # noqa: F401  (fixture reuse)
@@ -237,11 +238,14 @@ def test_q1_verdict_106_with_adapter_down(watcher):
 
 class FakeProbe:
     def __init__(self, next_uptime):
-        self.available, self.reason, self.link_detail = True, "ok", {}
-        self.last_uptime = 1000.0
+        self.available, self.reason, self.reason_detail = True, "ok", ""
+        self.link_detail = {}
+        self.last_uptime = 1000.0  # reference d'avant la coupure (pre-outage sample)
         self._next = next_uptime
 
     def probe(self):
+        self.uptime()  # like the real probe: a successful probe includes an uptime read
+        self.available = True
         return True
 
     def uptime(self):
@@ -272,3 +276,138 @@ def test_warmup_kept_after_real_reboot(sim, watcher, monkeypatch):  # noqa: F811
     log = watcher.LOG_FILE.read_text()
     assert "warmup 25.0 s" in log
     assert "warmup saute" not in log
+
+
+# --- review 0.4.0 fixes: B1 re-probe, B2 capture cap, M2 clean cli, M3 spawn safety ---
+
+def test_power_on_reprobes_when_root_was_lost(sim, watcher, monkeypatch):  # noqa: F811
+    class FlakyStartup(FakeProbe):
+        def __init__(self):
+            super().__init__(500.0)
+            self.probe_calls = 0
+
+        def probe(self):
+            self.probe_calls += 1
+            self.available = self.probe_calls >= 2  # fails at startup, ok afterwards
+            return self.available
+
+    p = FlakyStartup()
+    monkeypatch.setattr(watcher, "ROOT_MODE", "auto")
+    monkeypatch.setattr(watcher, "RootProbe", lambda *a: p)
+    monkeypatch.setattr(watcher, "spawn_q1_capture", lambda *a: None)
+    sim["start_cycle"] = False
+    sim["script"] = [False] * 4 + [True]
+    sim["run"]()
+    assert p.probe_calls >= 2  # the power_on re-evaluated the root transport
+    log = watcher.LOG_FILE.read_text()
+    assert "root indisponible" in log
+    assert "warmup" in log
+
+
+def test_root_lost_at_power_on_recovers_after_warmup(sim, watcher, monkeypatch):  # noqa: F811
+    class FlakyUptime(FakeProbe):
+        def __init__(self):
+            super().__init__(500.0)
+            self.uptime_calls = 0
+            self.probe_calls = 0
+
+        def probe(self):
+            self.probe_calls += 1
+            self.uptime()  # like the real probe
+            self.available = True
+            return True
+
+        def uptime(self):
+            self.uptime_calls += 1
+            if self.uptime_calls == 2:  # startup ok, power_on fails (slow sshd at boot)
+                raise watcher.RootError("ssh_timeout")
+            return 600.0
+
+    p = FlakyUptime()
+    monkeypatch.setattr(watcher, "ROOT_MODE", "auto")
+    monkeypatch.setattr(watcher, "RootProbe", lambda *a: p)
+    monkeypatch.setattr(watcher, "spawn_q1_capture", lambda *a: None)
+    sim["start_cycle"] = False
+    sim["script"] = [False] * 4 + [True]
+    sim["run"]()
+    log = watcher.LOG_FILE.read_text()
+    assert "root perdu" in log
+    assert "root actif apres warmup" in log  # second chance after the warmup, not next power-on
+    assert p.available is True
+
+
+def test_q1_captures_capped_across_unavailable_flaps(sim, watcher, monkeypatch):  # noqa: F811
+    spawns = []
+    monkeypatch.setattr(watcher, "spawn_q1_capture", lambda state: spawns.append(state))
+
+    class FlapProbe(FakeProbe):
+        def __init__(self):
+            super().__init__(500.0)
+            self.n = 0
+
+        def link_status(self):
+            self.n += 1
+            self.link_detail = {}
+            return "unavailable" if self.n % 2 else "connected"
+
+    p = FlapProbe()
+    monkeypatch.setattr(watcher, "ROOT_MODE", "auto")
+    monkeypatch.setattr(watcher, "RootProbe", lambda *a: p)
+    sim["start_cycle"] = False
+    sim["script"] = [False] * 4 + [True]
+    sim["run"]()
+    # 106 flapping must not bypass the cap: unavailable episodes consume the same budget
+    assert len(spawns) == watcher.Q1_MAX_CAPTURES
+    assert set(spawns) == {"unavailable"}
+
+
+def test_spawn_q1_capture_swallows_oserror(watcher, monkeypatch, tmp_path):
+    monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(watcher.subprocess, "Popen", boom)
+    assert watcher.spawn_q1_capture("down") is None
+    assert "capture Q1 impossible" in watcher.LOG_FILE.read_text()
+
+
+def test_spawn_q1_capture_happy_path(watcher, monkeypatch, tmp_path):
+    monkeypatch.setattr(watcher, "LOG_FILE", tmp_path / "w.log")
+    calls = []
+    monkeypatch.setattr(watcher.subprocess, "Popen", lambda cmd, stdout=None, stderr=None: calls.append(cmd))
+    capture = watcher.spawn_q1_capture("down")
+    assert capture is not None and capture.name.endswith("-down.json")
+    assert "--q1-capture" in [str(arg) for arg in calls[0]]
+    assert capture.with_suffix(".err").exists()
+    assert "capture Q1" in watcher.LOG_FILE.read_text()
+
+
+def test_cli_q1_capture_failure_is_clean(watcher, monkeypatch, tmp_path, capsys):
+    class HalfDeadProbe:
+        def __init__(self, *args):
+            self.available, self.reason, self.reason_detail = True, "ok", ""
+            self.link_detail = {}
+
+        def probe(self):
+            self.available = True
+            return True
+
+        def uptime(self):
+            raise watcher.RootError("ssh_failed", "boom")
+
+    monkeypatch.setattr(watcher, "RootProbe", HalfDeadProbe)
+    monkeypatch.setattr(watcher, "ROOT_MODE", "root")
+    monkeypatch.setenv("SONOS_BT", "12:34:56:78:9a:bc")
+    monkeypatch.setenv("ALLOW_INSECURE_TLS", "1")
+    monkeypatch.setattr(sys, "argv", ["sonos-watcher.py", "--q1-capture", str(tmp_path / "x.json")])
+    assert watcher.cli() == 2
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_luna_bad_json_redacts_key_material(probe, watcher, monkeypatch):
+    monkeypatch.setattr(probe, "_run", lambda remote, timeout: '{"linkKey": [1,2,3,')
+    with pytest.raises(watcher.RootError) as exc:
+        probe.luna("luna://x", {"address": "aa"})
+    assert "linkKey" not in str(exc.value)
+    assert "redacted" in str(exc.value)
