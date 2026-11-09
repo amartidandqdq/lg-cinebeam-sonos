@@ -339,6 +339,12 @@ def test_root_lost_at_power_on_recovers_after_warmup(sim, watcher, monkeypatch):
 def test_q1_captures_capped_across_unavailable_flaps(sim, watcher, monkeypatch):  # noqa: F811
     spawns = []
     monkeypatch.setattr(watcher, "spawn_q1_capture", lambda state: spawns.append(state))
+    monkeypatch.setattr(watcher, "root_connect", lambda *a: None)
+    monkeypatch.setattr(watcher, "luna_connect", lambda *a: None)
+    monkeypatch.setattr(watcher, "observe_route",
+                        lambda ws, n: (watcher.RouteResult("BT_ROUTE_STABLE",
+                                                           "identity_and_audio_unverified",
+                                                           "bt_soundbar"), n + 3))
 
     class FlapProbe(FakeProbe):
         def __init__(self):
@@ -353,6 +359,8 @@ def test_q1_captures_capped_across_unavailable_flaps(sim, watcher, monkeypatch):
     p = FlapProbe()
     monkeypatch.setattr(watcher, "ROOT_MODE", "auto")
     monkeypatch.setattr(watcher, "RootProbe", lambda *a: p)
+    monkeypatch.setattr(watcher, "sound_output",
+                        lambda ws, n: "tv_speaker" if n <= 2 else "bt_soundbar")
     sim["start_cycle"] = False
     sim["script"] = [False] * 4 + [True]
     sim["run"]()
@@ -434,6 +442,7 @@ def _link_reads(sim, watcher, monkeypatch, states, limit=4000.0):  # noqa: F811
     monkeypatch.setattr(watcher, "ROOT_MODE", "auto")
     monkeypatch.setattr(watcher, "RootProbe", lambda *a: p)
     monkeypatch.setattr(watcher, "spawn_q1_capture", lambda *a: None)
+    monkeypatch.setattr(watcher, "root_connect", lambda *a: None)
     monkeypatch.setattr(watcher, "LINK_POLL_CALM", 300.0)
     monkeypatch.setattr(watcher, "LINK_POLL_HOT", 30.0)
     sim["limit"] = limit
@@ -463,3 +472,80 @@ def test_validate_config_rejects_hot_above_calm(watcher, monkeypatch):
     monkeypatch.setenv("LINK_POLL_HOT", "500")  # above the 300 s calm cadence
     with pytest.raises(ValueError, match="LINK_POLL_HOT"):
         watcher.validate_config()
+
+
+# --- step 3: root connect + route write (validated by hand on 2026-11-09) ---
+
+def test_methods_root_first_when_available(watcher, monkeypatch):
+    assert watcher.methods_for(0, True, True) == ["root", "luna"]
+    assert watcher.methods_for(0, True, False) == ["luna", "luna"]
+    monkeypatch.setattr(watcher, "MENU_FALLBACK", True)
+    monkeypatch.setattr(watcher, "MENU_PROFILE", "hu710qke-webos24")
+    assert watcher.methods_for(0, False, True) == ["root", "luna", "menu"]
+    assert watcher.methods_for(0, False, False) == ["luna", "luna", "menu"]
+
+
+def test_connect_bt_treats_131_as_noop_and_other_as_error(probe, watcher, monkeypatch):
+    cases = [
+        ({"returnValue": True}, None),
+        ({"errorCode": 131, "returnValue": False}, None),
+        ({"errorCode": 105, "returnValue": False}, "a2dp_connect_failed"),
+    ]
+    for reply, expected in cases:
+        monkeypatch.setattr(probe, "luna", lambda uri, payload=None, t=15, _reply=reply: _reply)
+        if expected is None:
+            assert probe.connect_bt() == reply
+        else:
+            with pytest.raises(watcher.RootError, match=expected):
+                probe.connect_bt()
+
+
+def test_root_connect_writes_route_only_when_needed(probe, watcher, monkeypatch):
+    calls = []
+    monkeypatch.setattr(probe, "connect_bt", lambda: calls.append("connect"))
+    monkeypatch.setattr(probe, "set_route", lambda: calls.append("route"))
+    monkeypatch.setattr(watcher, "sound_output", lambda ws, n: "tv_speaker")
+    watcher.root_connect(probe, None, 1)
+    assert calls == ["connect", "route"]
+    monkeypatch.setattr(watcher, "sound_output", lambda ws, n: "bt_soundbar")
+    watcher.root_connect(probe, None, 1)
+    assert calls == ["connect", "route", "connect"]  # route already on target: no write
+
+
+def test_connect_round_dispatches_root_method(watcher, monkeypatch, tmp_path):
+    dispatched = []
+    monkeypatch.setattr(watcher, "root_connect", lambda probe, ws, n: dispatched.append(probe))
+    monkeypatch.setattr(watcher, "sound_output", lambda ws, n: "tv_speaker")
+    monkeypatch.setattr(watcher, "observe_route",
+                        lambda ws, n: (watcher.RouteResult("BT_ROUTE_STABLE",
+                                                           "identity_and_audio_unverified",
+                                                           "bt_soundbar"), n))
+    monkeypatch.setattr(watcher, "PAUSE_FILE", tmp_path / "paused")
+    monkeypatch.setattr(watcher.time, "sleep", lambda s: None)
+
+    class FakeWS:
+        def close(self):
+            pass
+
+    marker = object()
+    result, _ = watcher.connect_round(FakeWS(), 1, ["root"], marker)
+    assert dispatched == [marker]
+    assert result.route_stable
+
+
+def test_probe_arms_snoop_once_per_root_gain(probe, monkeypatch):
+    arms = []
+
+    def fake_luna(uri, payload=None, t=6):
+        arms.append(uri.rsplit("/", 1)[-1])
+        return {"returnValue": True}
+
+    monkeypatch.setattr(probe, "_run", lambda remote, timeout: "500.0 100.0")
+    monkeypatch.setattr(probe, "luna", fake_luna)
+    assert probe.probe() is True
+    assert arms == ["setTrace"]              # first root gain: snoop armed
+    assert probe.probe() is True
+    assert arms == ["setTrace"]              # root still up: no re-arm
+    probe.available = False                  # root lost: the projector may have rebooted
+    assert probe.probe() is True
+    assert arms == ["setTrace", "setTrace"]  # re-armed after the loss

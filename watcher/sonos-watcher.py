@@ -102,12 +102,26 @@ class PowerTracker:
         return None
 
 
-def methods_for(failed_rounds, adopted):
-    """Methodes a essayer. Le menu rejoue des touches visibles a l'ecran : uniquement au 1er tour
-    apres un vrai allumage, jamais en reprise ni sur un projecteur deja allume (`adopted`)."""
+def methods_for(failed_rounds, adopted, root_ok=False):
+    """Methodes a essayer. Le root passe en premier quand le transport est disponible
+    (connect direct + route luna, sans popup) ; l'alerte SSAP reste le repli. Le menu
+    rejoue des touches visibles a l'ecran : uniquement au 1er tour apres un vrai allumage,
+    jamais en reprise ni sur un projecteur deja allume (`adopted`)."""
+    base = ["root", "luna"] if root_ok else ["luna", "luna"]
     if failed_rounds == 0 and not adopted and MENU_FALLBACK and MENU_PROFILE == "hu710qke-webos24":
-        return ["luna", "luna", "menu"]
-    return ["luna", "luna"]
+        return base + ["menu"]
+    return base
+
+
+def root_connect(probe, ws, n):
+    """Etape 3 en root : connect direct + route par luna (valide a la main le 2026-11-09 :
+    lien en ~3 s sans popup bloquant, route basculee par setSystemSettings desaccessible
+    sans root). Le popup SSAP n'est pas joue sur ce chemin ; si la route refuse de suivre,
+    le round enchainera avec la methode SSAP suivante (alerte + popup)."""
+    probe.connect_bt()
+    time.sleep(2)
+    if sound_output(ws, n) != TARGET:
+        probe.set_route()
 
 
 def fmt_delay(seconds):
@@ -137,6 +151,7 @@ class Recovery:
         self.reason = "service_start"
         self.since = datetime.now().isoformat(timespec="seconds")
         self.luna_only = True   # no menu keys: startup, blip/drop recovery (only a real power-on allows them)
+        self.root_ok = False    # transport root disponible : methods() placera "root" en tête
         self.failed_rounds = 0
         self.next_try = 0.0     # monotonic : pas de reprise avant cet instant
         self.had_miss = False   # une sonde a rate depuis la derniere lecture de la sortie
@@ -275,7 +290,7 @@ class Recovery:
             log(f"route BT affichee mais lien A2DP mort — panne visible (root, episode {self.link_episodes})")
 
     def methods(self):
-        return methods_for(self.failed_rounds, self.luna_only)
+        return methods_for(self.failed_rounds, self.luna_only, self.root_ok)
 
     def on_round(self, result, now):
         if result.route_stable:
@@ -500,10 +515,11 @@ class RootError(RuntimeError):
 
 
 class RootProbe:
-    """Lectures root par SSH. -tt obligatoire : sans PTY, luna-send renvoie rc=0 sans aucune
-    sortie — mecanisme intrinseque au PTY, verifie le 2026-11-09 (4 bras : -T direct, login
-    shell, XDG_RUNTIME_DIR exporte : tous muets ; -tt : OK). Lecture seule : a2dp/getStatus
-    et /proc/uptime. Les ecritures (connect, popup, sortie audio) restent SSAP — etape 3."""
+    """Transport root par SSH. -tt obligatoire : sans PTY, luna-send renvoie rc=0 sans
+    aucune sortie — mecanisme intrinseque au PTY, verifie le 2026-11-09 (4 bras : -T direct,
+    login shell, XDG_RUNTIME_DIR exporte : tous muets ; -tt : OK). Lectures : a2dp/getStatus
+    et /proc/uptime. Ecritures (etape 3, validees a la main le 2026-11-09) : a2dp/connect
+    direct (fini le hack alerte) et changeSoundOutput par luna (fini le detour SSAP)."""
 
     def __init__(self, host, key, known_hosts):
         self.host = host
@@ -515,6 +531,7 @@ class RootProbe:
         self.last_uptime = None  # dernier echantillon ; sert de reference pour blip vs reboot
         self.link = "unknown"
         self.link_detail = {}
+        self.snoop_armed = False  # snoop MTK (re)arme : /tmp se vide au reboot du projecteur
 
     @staticmethod
     def _stderr_tail(result, limit=140):
@@ -565,9 +582,18 @@ class RootProbe:
 
     def probe(self):
         """Detection bornee : /proc/uptime lisible = transport root operationnel."""
+        if not self.available:
+            # le root a ete perdu : le projecteur a peut-etre reboote (/tmp vide, snoop off)
+            self.snoop_armed = False
         try:
             self.uptime()
             self.available, self.reason = True, "ok"
+            if not self.snoop_armed:
+                try:
+                    self.arm_snoop()
+                    self.snoop_armed = True
+                except RootError:
+                    pass  # le snoop est un diagnostic : jamais bloquant
         except RootError as exc:
             self.available, self.reason = False, exc.reason
             self.reason_detail = str(exc)
@@ -596,6 +622,28 @@ class RootProbe:
         self.link_detail = {k: reply.get(k) for k in ("connected", "connecting", "playing")}
         self.link = "connected" if connected else ("connecting" if connecting else "down")
         return self.link
+
+    def arm_snoop(self):
+        """Re-arme le snoop HCI de la pile MTK vers /tmp (tmpfs : zero flash, perdu au
+        reboot — d'ou le re-armement a chaque (re)gain de root). Rotation native 2 Mo.
+        Valide le 2026-11-09 : setTrace accepte du premier coup, fichier cree en ~1 s."""
+        return self.luna("luna://com.webos.service.bluetooth2/adapter/internal/setTrace",
+                         {"snoopTraceEnabled": True, "snoopLogPath": "/tmp/btsnoop.cfa"})
+
+    def connect_bt(self, t=15):
+        """a2dp/connect direct (valide le 2026-11-09 : lien etabli en ~3 s, sans popup
+        bloquant). 131 = Already connected : no-op, pas un echec ; la relecture de route
+        reste a la charge de l'appelant (connected ne prouve pas le routage)."""
+        reply = self.luna("luna://com.webos.service.bluetooth2/a2dp/connect", {"address": SONOS_BT}, t=t)
+        if reply.get("returnValue") or reply.get("errorCode") == 131:
+            return reply
+        raise RootError("a2dp_connect_failed", f"errorCode {reply.get('errorCode')}")
+
+    def set_route(self, output=TARGET, t=10):
+        """changeSoundOutput par luna root — passe par setSystemSettings, l'appel qui etait
+        refuse 401 sans root (valide le 2026-11-09 : route basculee en ~3 s)."""
+        return self.luna("luna://com.webos.service.apiadapter/audio/changeSoundOutput",
+                         {"output": output}, t=t)
 
 
 def q1_battery(probe, bt):
@@ -890,7 +938,7 @@ def observe_route(ws, n):
     return RouteResult("BT_ROUTE_STABLE", "identity_and_audio_unverified", out), n
 
 
-def connect_round(ws, n, methods):
+def connect_round(ws, n, methods, probe=None):
     result = RouteResult("UNKNOWN", "no_attempt")
     for i, how in enumerate(methods, 1):
         if PAUSE_FILE.exists():
@@ -904,7 +952,14 @@ def connect_round(ws, n, methods):
             return RouteResult("UNKNOWN", "other_or_unknown_output", out), n
         if out != TARGET:
             try:
-                (luna_connect if how == "luna" else menu_connect)(ws, n + 1)
+                if how == "root":
+                    if probe is None:
+                        raise SessionError("root_transport_missing")
+                    root_connect(probe, ws, n + 1)
+                elif how == "luna":
+                    luna_connect(ws, n + 1)
+                else:
+                    menu_connect(ws, n + 1)
             except Exception as e:
                 log(f"attempt={i} method={how} evidence=UNKNOWN reason=command_failed detail={e.__class__.__name__}")
                 # A failed session must not be reused for further mutations.
@@ -1198,7 +1253,8 @@ def main():
             hot_until = time.monotonic() + LINK_HOT_WINDOW
             last_route_kind = route_kind
         if recovery.on_reading(out):
-            result, n = connect_round(ws, n, recovery.methods())
+            recovery.root_ok = bool(probe is not None and probe.available)
+            result, n = connect_round(ws, n, recovery.methods(), probe)
             recovery.on_round(result, time.monotonic())
         elif (probe is not None and probe.available and recovery.phase is Phase.WATCH
               and route_kind == "TARGET" and time.monotonic() >= next_link_read):
@@ -1256,15 +1312,31 @@ def cli():
                 json.dumps({"bt": SONOS_BT, "verdict": q1_verdict(replies),
                             "replies": q1_masked(replies)}, indent=1, sort_keys=True),
                 encoding="utf-8")
+            # offload du snoop MTK : la preuve HCI de l'episode, avant la rotation ou le reboot
+            snoop_dir = pathlib.Path(args.q1_capture).parent
+            try:
+                subprocess.run(["scp", "-F", "/dev/null", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR",
+                                "-o", "ConnectTimeout=6", "-i", ROOT_SSH_KEY,
+                                "-o", "StrictHostKeyChecking=accept-new",
+                                "-o", f"UserKnownHostsFile={ROOT_KNOWN_HOSTS}",
+                                f"root@{HOST}:/tmp/btsnoop.cfa_MTK*", str(snoop_dir) + "/"],
+                               capture_output=True, timeout=60, check=False)
+            except OSError:
+                pass  # best-effort : la capture JSON reste la preuve primaire
             return 0
         if args.reconnect_now:
             if PAUSE_FILE.exists():
                 raise ValueError("resume before reconnect-now")
+            probe, methods = None, ["luna", "luna"]
+            if ROOT_MODE != "ssap":
+                probe = RootProbe(HOST, ROOT_SSH_KEY, ROOT_KNOWN_HOSTS)
+                if probe.probe():
+                    methods = ["root", "luna"]
             ws = None
             try:
                 ws = open_ws()
                 register(ws, read_key())
-                result, _ = connect_round(ws, 1, ["luna", "luna"])
+                result, _ = connect_round(ws, 1, methods, probe)
                 print(json.dumps(result._asdict()))
                 return 0 if result.route_stable else 1
             finally:

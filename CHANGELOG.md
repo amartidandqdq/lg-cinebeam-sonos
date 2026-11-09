@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 — 2026-11-09
+- Step 3 landed: in root mode the recovery connects with a direct `a2dp/connect` (the alert
+  hack stays as the SSAP fallback in the method ladder) and writes the route with
+  `changeSoundOutput` over luna root — the call that was 401-refused without root. Both
+  validated by hand on 2026-11-09: link established in ~3 s with no blocking popup, route
+  switched in ~3 s. `connected` still never counts as routing: the round re-reads the route
+  and only writes it when it is not on target.
+- The MTK snoop trace (`adapter/internal/setTrace`) is re-armed on every root gain — `/tmp`
+  is wiped at projector reboot, and the snoop is the only source of HCI disconnect reasons
+  (native 2 MB rotation, RAM-only, zero flash). Q1 captures now offload the snoop files
+  next to their JSON.
+- `--reconnect-now` uses the root method first when the transport is available.
+
 ## 0.4.2 — 2026-11-09
 - Adaptive link polling (step 4 option (c), designed by the GLM-5.3-flash-max review round):
   calm 300 s when the link is stable, hot 30 s during the 15 minutes following any route or
