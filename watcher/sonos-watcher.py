@@ -57,6 +57,7 @@ ROOT_SSH_KEY = os.environ.get("ROOT_SSH_KEY", str(pathlib.Path.home() / ".ssh" /
 ROOT_KNOWN_HOSTS = os.environ.get("ROOT_KNOWN_HOSTS", str(pathlib.Path.home() / ".ssh" / "known_hosts.cinebeam"))
 LINK_POLL = float(os.environ.get("LINK_POLL", 60))  # s entre deux lectures du lien quand la route est cible
 LINK_CONFIRM_READS = 2  # lectures lien non connecte consecutives avant de declarer bt_link_lost
+Q1_MAX_CAPTURES = 5     # captures Q1 par allumage : un episode = une capture, pas plus
 
 
 def classify_output(output):
@@ -585,6 +586,51 @@ class RootProbe:
         return self.link
 
 
+def q1_battery(probe, bt):
+    """Batterie Q1 en lecture seule : face a un 106, distingue un lien coupe mais appaire
+    (reparable par a2dp/connect) d'un reset de l'adaptateur ou d'un desappairage (permanent)."""
+    return {
+        "uptime": probe.uptime(),
+        "a2dp_getStatus": probe.luna("luna://com.webos.service.bluetooth2/a2dp/getStatus", {"address": bt}),
+        "adapter_getStatus": probe.luna("luna://com.webos.service.bluetooth2/adapter/getStatus"),
+        "getLinkKey": probe.luna("luna://com.webos.service.bluetooth2/device/internal/getLinkKey", {"address": bt}),
+        "avrcp_getStatus": probe.luna("luna://com.webos.service.bluetooth2/avrcp/getStatus", {"address": bt}),
+    }
+
+
+def q1_masked(replies):
+    """Copie sans secret : tout champ *key* non vide (string ou liste d'octets) -> taille seule."""
+    out = {}
+    for name, reply in replies.items():
+        if not isinstance(reply, dict):
+            out[name] = reply
+            continue
+        clean = {}
+        for key, value in reply.items():
+            if "key" in key.lower() and value and isinstance(value, (str, list)):
+                unit = "chars" if isinstance(value, str) else "bytes"
+                clean[key] = f"<present: {len(value)} {unit}>"
+            else:
+                clean[key] = value
+        out[name] = clean
+    return out
+
+
+def q1_verdict(replies):
+    status = replies["a2dp_getStatus"]
+    if status.get("returnValue"):
+        return "link_up: no discrimination needed; keep this snapshot as the healthy reference"
+    if status.get("errorCode") != 106:
+        return f"unexpected errorCode {status.get('errorCode')}: extend the battery before acting"
+    adapter, linkkey = replies["adapter_getStatus"], replies["getLinkKey"]
+    if not adapter.get("returnValue") or adapter.get("powered") is False:
+        return "106 with adapter down or reset: a2dp/connect cannot repair; re-check the adapter first"
+    if not linkkey.get("returnValue") or not linkkey.get("linkKey"):
+        return "106 with adapter up and no link key: unpaired or address changed; 106 is permanent, re-pair"
+    return ("106 with adapter up and link key present: link down but still paired; "
+            "a2dp/connect is expected to repair (tools/q1_battery.py --repair)")
+
+
 def luna_connect(ws, n):
     """Connexion A2DP directe, invisible a l'ecran (astuce lgtv-control-mcp :
     un luna:// place dans le onclose d'une alerte s'execute quand on la ferme)."""
@@ -1102,7 +1148,19 @@ def main():
                 probe.reason_detail = str(exc)
                 log(f"lecture lien root impossible ({exc}) — re-evaluation au prochain allumage")
             else:
+                was_flagged = recovery.link_flag
                 recovery.on_link(state)
+                if (recovery.link_flag and not was_flagged and state in ("down", "unavailable")
+                        and recovery.link_episodes <= Q1_MAX_CAPTURES):
+                    # L'etat 106/down est ephemere (le lien se retablit seul) : la batterie Q1
+                    # doit capturer l'evidence a l'instant exact de l'episode. Lecture seule.
+                    capture = LOG_FILE.parent / "q1-captures" / f"{datetime.now():%Y%m%d-%H%M%S}-{state}.json"
+                    capture.parent.mkdir(parents=True, exist_ok=True)
+                    with open(capture.with_suffix(".err"), "w") as err:
+                        subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()),
+                                          "--q1-capture", str(capture)],
+                                         stdout=subprocess.DEVNULL, stderr=err)
+                    log(f"episode lien {state} — capture Q1 (lecture seule) -> {capture.name}")
         close(ws)
         time.sleep(POLL)
 
@@ -1114,6 +1172,8 @@ def cli():
     group.add_argument("--pause", action="store_true")
     group.add_argument("--resume", action="store_true")
     group.add_argument("--reconnect-now", action="store_true")
+    group.add_argument("--q1-capture", metavar="PATH",
+                       help="run the read-only Q1 battery and write JSON evidence to PATH")
     args = parser.parse_args()
     if args.pause or args.resume:
         set_paused(args.pause)
@@ -1122,6 +1182,16 @@ def cli():
         validate_config()
         if args.diagnose:
             print(json.dumps(diagnose(), sort_keys=True))
+            return 0
+        if args.q1_capture:
+            probe = RootProbe(HOST, ROOT_SSH_KEY, ROOT_KNOWN_HOSTS)
+            if not probe.probe():
+                raise SessionError(f"root unavailable: {probe.reason_detail}")
+            replies = q1_battery(probe, SONOS_BT)
+            pathlib.Path(args.q1_capture).write_text(
+                json.dumps({"bt": SONOS_BT, "verdict": q1_verdict(replies),
+                            "replies": q1_masked(replies)}, indent=1, sort_keys=True),
+                encoding="utf-8")
             return 0
         if args.reconnect_now:
             if PAUSE_FILE.exists():

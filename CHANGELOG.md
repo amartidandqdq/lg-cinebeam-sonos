@@ -22,6 +22,12 @@
 - New env: `ROOT_MODE` (default auto), `ROOT_SSH_KEY`, `ROOT_KNOWN_HOSTS`, `LINK_POLL`
   (default 60 s, bounded 20-600). Without SSH the behavior is unchanged (existing suite green;
   new coverage in `tests/test_root_link.py`).
+- Automatic Q1 evidence capture: on every link episode (`down` confirmed, or `unavailable`
+  on first sight), the watcher files a read-only discrimination battery under
+  `~/sonos-watcher/q1-captures/` (at most 5 per power-on) — the 106 state is ephemeral and
+  the evidence must be captured at the exact moment. Key material is never written (size
+  only). `tools/q1_battery.py` runs the same battery on demand; `--repair` adds
+  `a2dp/connect` plus a link re-read, meaningful only while the link is already dead.
 
 ## 0.3.3 — 2026-11-08
 - Make the main loop's recovery lifecycle explicit: a `Phase` enum (`STARTUP_OBSERVE`, `OFF`,

@@ -89,6 +89,10 @@ What it adds over SSAP-only:
   kept) from a network blip (warmup skipped) — up to ~40 s saved on blips.
 - **`--diagnose` tri-state.** A `root` section reports `ssh` / `luna` / `link`
   independently of the SSAP layer, even while the WebSocket is down.
+- **Automatic Q1 evidence capture.** The 106 state is ephemeral (the link recovers by
+  itself), so on every link episode the watcher files a read-only discrimination battery
+  under `~/sonos-watcher/q1-captures/` (at most 5 per power-on). `tools/q1_battery.py`
+  runs the same battery on demand; `--repair` adds `a2dp/connect` plus a link re-read.
 
 ### Pair and start
 

@@ -196,6 +196,43 @@ def test_root_diagnose_reports_all_layers(watcher, monkeypatch):
     assert info["link"]["state"] == "connected"
 
 
+# --- Q1 battery: masking and verdicts ---
+
+def test_q1_mask_hides_str_and_byte_list_keys(watcher):
+    replies = {"getLinkKey": {"returnValue": True, "linkKey": [1, 2, 3, 4]},
+               "connect": {"returnValue": False, "errorText": "no secret here"},
+               "note": "plain"}
+    masked = watcher.q1_masked(replies)
+    assert masked["getLinkKey"]["linkKey"] == "<present: 4 bytes>"
+    assert masked["connect"]["errorText"] == "no secret here"
+    assert watcher.q1_masked({"getLinkKey": {"linkKey": "abcd"}})["getLinkKey"]["linkKey"] == "<present: 4 chars>"
+
+
+def test_q1_verdict_healthy_link_is_a_reference_snapshot(watcher):
+    assert "link_up" in watcher.q1_verdict({"a2dp_getStatus": {"returnValue": True}})
+
+
+def test_q1_verdict_106_with_link_key_is_repairable(watcher):
+    replies = {"a2dp_getStatus": {"errorCode": 106, "returnValue": False},
+               "adapter_getStatus": {"returnValue": True, "powered": True},
+               "getLinkKey": {"returnValue": True, "linkKey": [1]}}
+    assert "link down but still paired" in watcher.q1_verdict(replies)
+
+
+def test_q1_verdict_106_without_link_key_is_permanent(watcher):
+    replies = {"a2dp_getStatus": {"errorCode": 106, "returnValue": False},
+               "adapter_getStatus": {"returnValue": True, "powered": True},
+               "getLinkKey": {"returnValue": True}}
+    assert "permanent" in watcher.q1_verdict(replies)
+
+
+def test_q1_verdict_106_with_adapter_down(watcher):
+    replies = {"a2dp_getStatus": {"errorCode": 106, "returnValue": False},
+               "adapter_getStatus": {"returnValue": True, "powered": False},
+               "getLinkKey": {"returnValue": True, "linkKey": [1]}}
+    assert "adapter down or reset" in watcher.q1_verdict(replies)
+
+
 # --- step 2: /proc/uptime decides blip vs reboot before the warmup ---
 
 class FakeProbe:
