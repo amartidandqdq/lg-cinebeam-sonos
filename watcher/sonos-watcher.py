@@ -537,9 +537,10 @@ class RootProbe:
     def luna(self, uri, payload=None, t=6):
         """Appel luna one-shot. Erreur metier (errorCode) renvoyee telle quelle a l'appelant ;
         echec de transport -> RootError. Budgets : -w en ms < timeout subprocess."""
+        if payload is None:
+            payload = {}  # luna-send exige un payload positionnel, sinon il imprime son usage
         remote = f"luna-send -n 1 -w {int(t * 1000)} {shlex.quote(uri)}"
-        if payload is not None:
-            remote += " " + shlex.quote(json.dumps(payload))
+        remote += " " + shlex.quote(json.dumps(payload))
         line = self._run(remote, t + 4)
         try:
             reply = json.loads(line)

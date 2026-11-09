@@ -60,8 +60,35 @@ Edit `~/sonos-watcher/watcher.env` before pairing or starting. Set the real addr
 | `MENU_FALLBACK` | `0` | Opt-in visible UI fallback |
 | `MENU_PROFILE` | unset | Must be `hu710qke-webos24` when menu fallback enabled |
 | `MENU_KEYS` | measured layout | Comma-separated UP/DOWN/LEFT/RIGHT/ENTER/EXIT/BACK/HOME |
+| `ROOT_MODE` | `auto` | `auto` probes root at startup and each power-on and degrades silently to SSAP; `ssap` never uses SSH; `root` is the same as `auto` and expects the key to exist |
+| `ROOT_SSH_KEY` | `~/.ssh/id_ed25519` | Key for the root transport (read-only: link status and uptime) |
+| `ROOT_KNOWN_HOSTS` | `~/.ssh/known_hosts.cinebeam` | Host keys pinned on first connection; a key change is a hard error |
+| `LINK_POLL` | `60` | 20–600 seconds between A2DP link reads while the BT route is selected |
 
 Use `0` or `1` for boolean options. Invalid configuration exits with status 2; systemd does not restart that error in a loop.
+
+### Root transport (optional, read-only)
+
+With SSH root access to the projector, the watcher reads the real A2DP link state
+(`bluetooth2/a2dp/getStatus`: `connected`, `connecting`, `playing`) and `/proc/uptime`
+instead of inferring from `soundOutput` alone. `luna-send` on this firmware requires a
+PTY (`ssh -tt`) and returns rc=0 with no output otherwise; the transport treats that as
+a transport error, never as success. All root calls are read-only in this release —
+`connect`, popup and output writes stay SSAP.
+
+What it adds over SSAP-only:
+
+- **`bt_link_lost` visibility.** The failure where the route still claims the BT target
+  while the A2DP link is down (measured 2026-11-09 19:52, invisible to `soundOutput`)
+  is detected after two consecutive link reads, logged once per episode and published as
+  `"link"` in `state.json`. No recovery is attempted yet (planned step 3). The ambiguous
+  `errorCode 106` is reported as `unavailable` and never triggers action: it can mean an
+  adapter reset, an unpaired device or a changed address; `tools/q1_battery.py`
+  discriminates when it appears.
+- **Warmup skip.** After a connectivity outage, `/proc/uptime` tells a reboot (warmup
+  kept) from a network blip (warmup skipped) — up to ~40 s saved on blips.
+- **`--diagnose` tri-state.** A `root` section reports `ssh` / `luna` / `link`
+  independently of the SSAP layer, even while the WebSocket is down.
 
 ### Pair and start
 
