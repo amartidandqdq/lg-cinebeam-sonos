@@ -499,13 +499,23 @@ class RootProbe:
         self.known_hosts = known_hosts
         self.available = False
         self.reason = "not_probed"
+        self.reason_detail = ""  # str(RootError) du dernier echec : reason + queue de stderr
         self.last_uptime = None  # dernier echantillon ; sert de reference pour blip vs reboot
         self.link = "unknown"
         self.link_detail = {}
 
+    @staticmethod
+    def _stderr_tail(result, limit=140):
+        text = result.stderr.decode("utf-8", errors="replace").strip().replace("\n", " ")
+        return text[-limit:]
+
     def _run(self, remote, timeout):
-        options = ["-tt", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=2",
-                   "-i", self.key,
+        # -F /dev/null : ignore les configs ssh systeme et utilisateur. Obligatoire sous
+        # PrivateTmp (l'unite) : la resolution userns y fait apparaitre /etc/ssh/ssh_config.d
+        # en nobody:nogroup et ssh refuse le fichier ("Bad owner or permissions"). Toutes les
+        # options utiles sont passees en -o : le transport devient deterministe.
+        options = ["-F", "/dev/null", "-tt", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR",
+                   "-o", "ConnectTimeout=2", "-i", self.key,
                    # Cle epinglee a la premiere connexion (accept-new) : un changement de host key
                    # devient une erreur franche (MITM potentiel), pas un prompt silencieux.
                    "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={self.known_hosts}"]
@@ -517,11 +527,11 @@ class RootProbe:
         except OSError as exc:
             raise RootError("ssh_unavailable", exc.__class__.__name__) from None
         if result.returncode != 0:
-            raise RootError("ssh_failed", f"rc={result.returncode}")
+            raise RootError("ssh_failed", self._stderr_tail(result))
         lines = [ln.strip() for ln in result.stdout.decode("utf-8", errors="replace")
                  .replace("\r", "\n").splitlines() if ln.strip()]
         if not lines:
-            raise RootError("empty_output")
+            raise RootError("empty_output", self._stderr_tail(result))
         return lines[-1]  # derniere ligne non vide : insensible aux bannieres/eventuels \r de PTY
 
     def luna(self, uri, payload=None, t=6):
@@ -546,6 +556,7 @@ class RootProbe:
             self.available, self.reason = True, "ok"
         except RootError as exc:
             self.available, self.reason = False, exc.reason
+            self.reason_detail = str(exc)
         return self.available
 
     def uptime(self):
@@ -921,7 +932,8 @@ def root_diagnose():
     if ROOT_MODE == "ssap":
         return {"mode": "ssap", "available": False}
     probe = RootProbe(HOST, ROOT_SSH_KEY, ROOT_KNOWN_HOSTS)
-    info = {"mode": ROOT_MODE, "available": probe.probe(), "ssh": probe.reason}
+    info = {"mode": ROOT_MODE, "available": probe.probe(),
+            "ssh": probe.reason_detail or probe.reason}
     if info["available"]:
         try:
             info["link"] = dict(state=probe.link_status(), **probe.link_detail)
@@ -982,7 +994,7 @@ def main():
         if probe.probe():
             log(f"root actif (uptime {probe.last_uptime:.0f} s) — lien A2DP lisible")
         else:
-            log(f"root indisponible ({probe.reason}) — lectures SSAP seules, re-evaluation au prochain allumage")
+            log(f"root indisponible ({probe.reason_detail}) — lectures SSAP seules, re-evaluation au prochain allumage")
 
     tracker = PowerTracker()
     recovery = Recovery()
@@ -1012,7 +1024,8 @@ def main():
                     previous, current = probe.last_uptime, probe.uptime()
                 except RootError as exc:
                     probe.available, probe.reason = False, exc.reason
-                    log(f"root perdu ({exc.reason}) — re-evaluation au prochain allumage")
+                    probe.reason_detail = str(exc)
+                    log(f"root perdu ({exc}) — re-evaluation au prochain allumage")
                     log(f"projecteur detecte — warmup {WARMUP} s...")
                 else:
                     if previous is not None and current >= previous:
@@ -1057,6 +1070,8 @@ def main():
                     log(f"WS tombe — lien A2DP (root): {recovery.link}")
                 except RootError as exc:
                     probe.available, probe.reason = False, exc.reason
+                    probe.reason_detail = str(exc)
+                    log(f"WS tombe — lien A2DP illisible ({exc})")
             time.sleep(SCAN)
             continue
         if recovery.session_restored():
@@ -1083,7 +1098,8 @@ def main():
                 state = probe.link_status()
             except RootError as exc:
                 probe.available, probe.reason = False, exc.reason
-                log(f"lecture lien root impossible ({exc.reason}) — re-evaluation au prochain allumage")
+                probe.reason_detail = str(exc)
+                log(f"lecture lien root impossible ({exc}) — re-evaluation au prochain allumage")
             else:
                 recovery.on_link(state)
         close(ws)

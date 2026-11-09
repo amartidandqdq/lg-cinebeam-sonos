@@ -176,7 +176,8 @@ def test_root_diagnose_is_inert_in_ssap(watcher, monkeypatch):
 def test_root_diagnose_reports_all_layers(watcher, monkeypatch):
     class FakeProbe:
         def __init__(self, *args):
-            self.available, self.reason, self.link_detail = False, "ok", {"connected": True}
+            self.available, self.reason, self.reason_detail = False, "ok", ""
+            self.link_detail = {"connected": True}
 
         def probe(self):
             self.available = True
